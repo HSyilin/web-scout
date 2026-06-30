@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebScout - 智能资源提取器</title>
+  <style>
+    :root {
+      --bg: #12121f;
+      --dark: #1a1a2e;
+      --darker: #1e1e35;
+      --border: #2e2e4a;
+      --text: #e8e8f0;
+      --text-dim: #9898b0;
+      --primary: #4fc3f7;
+      --accent: #b39ddb;
+      --success: #4dd0c8;
+      --warning: #ffd54f;
+      --danger: #ef5350;
+      --radius: 8px;
+      --shadow: 0 2px 8px rgba(0,0,0,0.3);
+      --shadow-lg: 0 8px 32px rgba(0,0,0,0.5);
+      --btn-hover: 0 2px 12px rgba(79,195,247,0.15);
+      --overlay-bg: rgba(0, 0, 0, 0.7);
+      --scrollbar-thumb: var(--border);
+      --scrollbar-hover: var(--text-dim);
+    }
+    .light-theme {
+      --bg: #f5f6fa;
+      --dark: #ffffff;
+      --darker: #f0f1f5;
+      --border: #dcdfe6;
+      --text: #2c3e50;
+      --text-dim: #7f8c8d;
+      --primary: #2196F3;
+      --accent: #7c4dff;
+      --success: #00bfa5;
+      --warning: #ff9800;
+      --danger: #e53935;
+      --shadow: 0 2px 8px rgba(0,0,0,0.08);
+      --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+      --btn-hover: 0 2px 12px rgba(33,150,243,0.15);
+      --overlay-bg: rgba(0, 0, 0, 0.4);
+      --scrollbar-thumb: #c0c4cc;
+      --scrollbar-hover: #909399;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+      background: var(--bg); color: var(--text); height: 100vh;
+      display: flex; flex-direction: column; overflow: hidden;
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+    /* 主题切换时的平滑过渡 */
+    .titlebar, .searchbar, .tab-bar, .right-panel, .statusbar,
+    .panel-info-fixed, .resource-tabs, .sub-tabs, .panel-body,
+    .export-dialog, .settings-panel, .toast, .progress-bar-container {
+      transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+    }
+    /* 标题栏 */
+    .titlebar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 16px; background: var(--darker); border-bottom: 1px solid var(--border);
+      -webkit-app-region: drag; user-select: none;
+    }
+    .titlebar .logo { font-size: 16px; font-weight: 700; color: var(--primary); letter-spacing: 1px; }
+    .titlebar .actions { display: flex; gap: 8px; -webkit-app-region: no-drag; }
+    .titlebar button {
+      background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+      padding: 4px 10px; border-radius: var(--radius); cursor: pointer; font-size: 12px;
+      transition: all 0.2s;
+    }
+    .titlebar button:hover { background: var(--dark); color: var(--text); box-shadow: var(--btn-hover); }
+    .titlebar button.active { background: var(--btn-hover); color: var(--primary); border-color: var(--primary); }
+    /* 搜索栏 */
+    .searchbar {
+      display: flex; gap: 8px; padding: 12px 16px; background: var(--dark);
+      border-bottom: 1px solid var(--border); align-items: center;
+    }
+    .searchbar input {
+      flex: 1; padding: 10px 16px; border-radius: 20px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--text); font-size: 14px; outline: none;
+    }
+    .searchbar input:focus { border-color: var(--primary); }
+    .searchbar input::placeholder { color: var(--text-dim); }
+    .btn {
+      padding: 10px 20px; border-radius: 20px; border: none; cursor: pointer;
+      font-size: 13px; font-weight: 600; transition: all 0.2s;
+    }
+    .btn-primary { background: var(--primary); color: var(--bg); }
+    .btn-primary:hover { filter: brightness(0.9); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-inspect { background: var(--accent); color: #fff; }
+    .btn-inspect:hover { filter: brightness(0.9); }
+    .btn-inspect.active {
+      background: var(--success);
+      box-shadow: 0 0 10px color-mix(in srgb, var(--success) 50%, transparent);
+    }
+    /* 导航按钮 */
+    .nav-btn {
+      background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+      padding: 8px 12px; border-radius: 20px; cursor: pointer; font-size: 14px;
+      transition: all 0.2s; white-space: nowrap;
+    }
+    .nav-btn:hover:not(:disabled) { background: var(--dark); color: var(--text); border-color: var(--primary); }
+    .nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    /* 历史记录下拉 */
+    .history-item {
+      padding: 8px 12px; border-bottom: 1px solid var(--border); cursor: pointer;
+      font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .history-item:hover { background: var(--dark); color: var(--primary); }
+    .history-item:last-child { border-bottom: none; }
+    .history-header {
+      padding: 8px 12px; font-size: 11px; color: var(--text-dim);
+      border-bottom: 1px solid var(--border); font-weight: 600;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .history-header button {
+      background: transparent; border: none; color: var(--danger); cursor: pointer; font-size: 11px;
+    }
+    .history-header button:hover { text-decoration: underline; }
+    /* 标签栏 - Chrome风格 */
+    .tab-bar {
+      display: flex; align-items: flex-end; gap: 0; padding: 8px 8px 0;
+      background: var(--dark); border-bottom: none;
+      overflow-x: auto; overflow-y: hidden; min-height: 36px;
+    }
+    .tab-bar::-webkit-scrollbar { height: 0; }
+    .tab {
+      display: flex; align-items: center; gap: 6px; padding: 6px 12px 8px;
+      background: var(--darker); border: none;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer; font-size: 12px; color: var(--text-dim);
+      white-space: nowrap; max-width: 200px; transition: background 0.15s;
+      flex-shrink: 0; position: relative;
+      clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 100%, 0% 100%);
+      margin-right: -2px;
+    }
+    .tab:hover { background: var(--border); color: var(--text); }
+    .tab.active {
+      background: var(--bg); color: var(--primary);
+      z-index: 1;
+    }
+    .tab-title {
+      overflow: hidden; text-overflow: ellipsis; max-width: 150px;
+    }
+    .tab-close {
+      width: 16px; height: 16px; border-radius: 3px; border: none;
+      background: transparent; color: var(--text-dim); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; line-height: 1; flex-shrink: 0; opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .tab:hover .tab-close { opacity: 1; }
+    .tab-close:hover { background: var(--danger); color: #fff; }
+    .tab-add {
+      width: 28px; height: 28px; border-radius: 4px; border: none;
+      background: transparent; color: var(--text-dim); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; flex-shrink: 0; margin-left: 4px;
+    }
+    .tab-add:hover { color: var(--primary); }
+    /* 主内容区 */
+    .main-content { display: flex; flex: 1; overflow: hidden; }
+    /* 浏览器区域 */
+    .webview-area {
+      flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative;
+    }
+    /* 空状态 */
+    .empty-state {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; color: var(--text-dim); gap: 16px;
+      background: var(--bg);
+    }
+    .empty-state .empty-icon { font-size: 64px; opacity: 0.3; }
+    .empty-state .empty-text { font-size: 14px; }
+    .empty-state .empty-hint { font-size: 12px; opacity: 0.6; }
+    /* 加载层 */
+    .loading-overlay {
+      position: absolute; inset: 0; background: var(--overlay-bg);
+      display: flex; align-items: center; justify-content: center; z-index: 10;
+    }
+    .loading-spinner {
+      width: 40px; height: 40px; border: 3px solid var(--border);
+      border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+    /* 右侧面板 */
+    .right-panel {
+      width: 360px; background: var(--dark); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
+    }
+    .panel-header {
+      padding: 14px 16px; border-bottom: 1px solid var(--border);
+      font-size: 13px; font-weight: 600; color: var(--accent); display: flex;
+      justify-content: space-between; align-items: center;
+    }
+    /* 资源面板（标签页布局） */
+    .layer-panels {
+      border-bottom: 1px solid var(--border);
+      max-height: 60vh;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    /* 固定信息区：页面标题 + 选中元素文本 */
+    .panel-info-fixed {
+      background: var(--darker);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 12px;
+      flex-shrink: 0;
+    }
+    .panel-info-fixed .info-row {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 3px 0; font-size: 11px;
+    }
+    .panel-info-fixed .info-label {
+      color: var(--accent); font-weight: 600;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    .panel-info-fixed .info-value {
+      color: var(--text); word-break: break-all;
+      max-height: 40px; overflow: hidden;
+    }
+    /* Hover 预览面板 */
+    .hover-preview-panel {
+      margin: 4px 8px; padding: 8px 12px;
+      background: var(--btn-hover);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      flex-shrink: 0;
+    }
+    .hover-preview-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 6px;
+    }
+    .hover-preview-label {
+      font-size: 11px; color: var(--primary); font-weight: 600;
+    }
+    .hover-preview-selector {
+      font-size: 10px; color: var(--text-dim);
+      font-family: monospace;
+      background: var(--darker); padding: 1px 6px; border-radius: 3px;
+    }
+    .hover-preview-body {
+      font-size: 11px; color: var(--text);
+    }
+    .hover-preview-item {
+      padding: 2px 0;
+    }
+    .hover-preview-text {
+      padding: 2px 0; color: var(--text-dim);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .hover-preview-empty {
+      color: var(--text-dim); font-size: 11px;
+    }
+    .hover-preview-hint {
+      margin-top: 4px; font-size: 10px; color: var(--text-dim);
+      text-align: center;
+    }
+    /* 主标签栏 */
+    .resource-tabs {
+      display: flex; background: var(--darker);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto; flex-shrink: 0;
+    }
+    .resource-tabs::-webkit-scrollbar { height: 0; }
+    .resource-tab {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 12px; cursor: pointer;
+      font-size: 12px; color: var(--text-dim);
+      white-space: nowrap; border-bottom: 2px solid transparent;
+      transition: all 0.15s; user-select: none;
+    }
+    .resource-tab:hover { color: var(--text); background: var(--dark); }
+    .resource-tab.active {
+      color: var(--primary); border-bottom-color: var(--primary);
+      background: var(--dark);
+    }
+    .resource-tab .tab-count {
+      background: var(--border); color: var(--text);
+      padding: 1px 6px; border-radius: 8px; font-size: 10px;
+      min-width: 18px; text-align: center;
+    }
+    .resource-tab.active .tab-count {
+      background: var(--primary); color: #0f0f1a;
+    }
+    /* 主标签页内容 */
+    .tab-pane { display: none; flex: 1; overflow-y: auto; }
+    .tab-pane.active { display: flex; flex-direction: column; }
+    /* 子标签栏 */
+    .sub-tabs {
+      display: flex; gap: 4px; padding: 6px 8px;
+      background: var(--darker); border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .sub-tab {
+      display: flex; align-items: center; gap: 4px;
+      padding: 4px 10px; cursor: pointer;
+      font-size: 11px; color: var(--text-dim);
+      border-radius: 4px; transition: all 0.15s; user-select: none;
+    }
+    .sub-tab:hover { color: var(--text); background: var(--dark); }
+    .sub-tab.active {
+      color: var(--primary); background: var(--btn-hover);
+    }
+    .sub-tab .sub-count {
+      background: var(--border); color: var(--text);
+      padding: 0 5px; border-radius: 6px; font-size: 10px;
+    }
+    .sub-tab.active .sub-count {
+      background: var(--primary); color: #0f0f1a;
+    }
+    .sub-tab.clear-all-tab {
+      border: 1px solid var(--danger); border-radius: 4px;
+      padding: 4px 8px; font-size: 11px;
+    }
+    .sub-tab.clear-all-tab:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); }
+    /* 子标签页内容 */
+    .sub-pane { display: none; padding: 8px 12px; flex: 1; overflow-y: auto; }
+    .sub-pane.active { display: block; }
+    /* 面板内容区 */
+    .panel-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
+    .layer-group { margin-bottom: 16px; }
+    .layer-title {
+      font-size: 11px; font-weight: 700; color: var(--accent);
+      padding: 6px 10px; background: color-mix(in srgb, var(--accent) 10%, transparent);
+      border-radius: 6px; margin-bottom: 8px; border-left: 3px solid var(--accent);
+    }
+    /* 资源列表 */
+    .resource-list {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 8px; align-content: start;
+    }
+    .resource-list.list-mode { display: flex; flex-direction: column; gap: 6px; }
+    .resource-card {
+      background: var(--darker); border-radius: var(--radius); border: 1px solid var(--border);
+      overflow: hidden; cursor: pointer; transition: all 0.2s; position: relative;
+    }
+    .resource-card:hover { border-color: var(--primary); transform: translateY(-1px); }
+    .resource-card.selected { border-color: var(--success); box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 25%, transparent); }
+    .resource-card .card-preview {
+      width: 100%; height: 80px; background: var(--dark); display: flex;
+      align-items: center; justify-content: center; overflow: hidden;
+    }
+    .resource-card .card-preview img { width: 100%; height: 100%; object-fit: cover; }
+    .resource-card .card-preview .icon-large { font-size: 28px; opacity: 0.6; }
+    .resource-card .card-info { padding: 4px 6px; }
+    .resource-card .card-name {
+      font-size: 9px; color: var(--text); white-space: nowrap; overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .resource-card .card-meta {
+      font-size: 8px; color: var(--text-dim); margin-top: 2px; display: flex;
+      justify-content: space-between;
+    }
+    .resource-card .card-check {
+      position: absolute; top: 3px; right: 3px; width: 14px; height: 14px;
+      border-radius: 3px; background: var(--shadow); border: 1.5px solid var(--text-dim);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .resource-card.selected .card-check { background: var(--success); border-color: var(--success); }
+    .resource-card.selected .card-check::after { content: '✓'; color: #fff; font-size: 9px; font-weight: 700; }
+    /* 链接行 */
+    .link-row {
+      display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+      background: var(--darker); border-radius: var(--radius); border: 1px solid var(--border);
+      cursor: pointer; transition: all 0.2s;
+    }
+    .link-row:hover { border-color: var(--primary); }
+    .link-row.selected { border-color: var(--success); }
+    .link-row .link-icon { font-size: 14px; flex-shrink: 0; }
+    .link-row .link-name { flex: 1; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .link-row .link-url { font-size: 9px; color: var(--text-dim); max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .link-row .link-check { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid var(--text-dim); flex-shrink: 0; }
+    .link-row.selected .link-check { background: var(--success); border-color: var(--success); }
+    /* 文本块 */
+    .text-block {
+      background: var(--darker); border-radius: var(--radius); border: 1px solid var(--border);
+      padding: 8px; cursor: pointer; transition: all 0.2s;
+    }
+    .text-block:hover { border-color: var(--primary); }
+    .text-block.selected { border-color: var(--success); }
+    .text-block .text-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+    .text-block .text-content { font-size: 10px; line-height: 1.4; color: var(--text-dim); max-height: 50px; overflow: hidden; }
+    /* 导出操作 */
+    .export-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+    .export-actions button {
+      padding: 10px; border-radius: var(--radius); border: 1px solid var(--border);
+      background: var(--darker); color: var(--text); cursor: pointer; font-size: 12px; text-align: left;
+    }
+    .export-actions button:hover { background: var(--dark); border-color: var(--primary); }
+    /* 状态栏 */
+    .statusbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 4px 12px; background: var(--darker); border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--text-dim);
+    }
+    .statusbar .status-text { flex: 1; }
+    /* 进度条 */
+    .progress-bar-container {
+      display: none !important;
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 400px;
+      background: var(--darker);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      z-index: 100;
+      box-shadow: var(--shadow-lg);
+    }
+    .progress-bar-container.show { display: block; }
+    .progress-bar-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .progress-bar-track {
+      width: 100%;
+      height: 8px;
+      background: var(--dark);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary), var(--accent));
+      border-radius: 4px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+    .progress-bar-info {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    /* 提示 */
+    .toast {
+      position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+      background: var(--darker); color: var(--text); padding: 10px 24px;
+      border-radius: 20px; border: 1px solid var(--border); font-size: 13px;
+      z-index: 100; opacity: 0; transition: opacity 0.3s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    
+    /* 导出对话框 */
+    .export-dialog-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--overlay-bg);
+      z-index: 200;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .export-dialog-overlay.show {
+      display: flex;
+    }
+    .export-dialog {
+      background: var(--dark);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 600px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: var(--shadow-lg);
+    }
+    .export-dialog-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .export-dialog-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--primary);
+    }
+    .export-dialog-close {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 20px;
+      cursor: pointer;
+      padding: 0;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+    }
+    .export-dialog-close:hover {
+      background: var(--darker);
+      color: var(--text);
+    }
+    .export-dialog-content {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .export-format-selector {
+      margin-bottom: 20px;
+    }
+    .export-format-label {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+    }
+    .export-format-options {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .export-format-btn {
+      padding: 8px 16px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--darker);
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .export-format-btn:hover {
+      border-color: var(--primary);
+      background: var(--btn-hover);
+    }
+    .export-format-btn.selected {
+      background: var(--primary);
+      color: var(--darker);
+      border-color: var(--primary);
+    }
+    .export-file-list {
+      margin-top: 16px;
+    }
+    .export-file-item {
+      background: var(--darker);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .export-file-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .export-file-name {
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 500;
+    }
+    .export-file-status {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .export-file-status.success {
+      color: var(--success);
+    }
+    .export-file-status.error {
+      color: var(--danger);
+    }
+    .export-file-download-info {
+      font-size: 11px;
+      color: var(--primary);
+      margin-top: 6px;
+      padding: 6px 10px;
+      background: var(--darker);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .export-file-download-info .download-size {
+      color: var(--primary);
+    }
+    .export-file-download-info .download-time {
+      color: var(--text-dim);
+      font-size: 10px;
+    }
+    /* SPA动态页面提示横幅 */
+    .spa-banner {
+      position: fixed;
+      top: 120px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: linear-gradient(135deg, var(--warning), #ff9800);
+      color: #000;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      z-index: 150;
+      box-shadow: 0 4px 12px rgba(255, 152, 0, 0.3);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      animation: slideDown 0.3s ease;
+    }
+    .spa-banner.hidden {
+      display: none;
+    }
+    .spa-banner-icon {
+      font-size: 16px;
+    }
+    .spa-banner-close {
+      background: transparent;
+      border: none;
+      color: #000;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.6;
+      transition: opacity 0.2s;
+    }
+    .spa-banner-close:hover {
+      opacity: 1;
+    }
+    @keyframes slideDown {
+      from {
+        transform: translateX(-50%) translateY(-20px);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(-50%) translateY(0);
+        opacity: 1;
+      }
+    }
+    .export-file-error {
+      display: none;
+      font-size: 11px;
+      color: var(--danger);
+      margin-top: 6px;
+      padding: 6px 8px;
+      background: color-mix(in srgb, var(--danger) 8%, transparent);
+      border-radius: 4px;
+      border-left: 3px solid var(--danger);
+    }
+    .export-progress-bar {
+      width: 100%;
+      height: 6px;
+      background: var(--dark);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .export-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary), var(--accent));
+      border-radius: 3px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+    .export-dialog-footer {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+    .export-dialog-btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .export-dialog-btn.primary {
+      background: var(--primary);
+      color: var(--darker);
+    }
+    .export-dialog-btn.primary:hover {
+      filter: brightness(0.9);
+    }
+    .export-dialog-btn.primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .export-dialog-btn.secondary {
+      background: var(--darker);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .export-dialog-btn.secondary:hover {
+      background: var(--dark);
+    }
+    /* 滚动条 */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; transition: background 0.2s; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+
+    /* SPA动态页面提示横幅 */
+    .spa-banner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--warning) 15%, transparent), color-mix(in srgb, var(--primary) 10%, transparent));
+      border-bottom: 1px solid color-mix(in srgb, var(--warning) 30%, var(--border));
+      font-size: 12px;
+      color: var(--warning);
+      flex-shrink: 0;
+      transition: all 0.3s ease;
+    }
+    .spa-banner.hidden {
+      display: none;
+    }
+    .spa-banner-icon {
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    .spa-banner-text {
+      flex: 1;
+      font-weight: 500;
+    }
+    .spa-banner-close {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+      flex-shrink: 0;
+      transition: color 0.2s;
+    }
+    .spa-banner-close:hover {
+      color: var(--text);
+    }
+
+    /* 仪表盘 */
+    .dashboard-section {
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .dashboard-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--primary);
+      margin-bottom: 12px;
+    }
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    .dashboard-card {
+      background: var(--dark);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+    .dashboard-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+    .dashboard-label {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .settings-section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+      margin-top: 8px;
+    }
+    /* 设置面板 */
+    .settings-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--overlay-bg);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+    }
+    .settings-overlay.show {
+      display: flex;
+    }
+    .settings-panel {
+      background: var(--darker);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      min-width: 360px;
+      max-width: 420px;
+      box-shadow: var(--shadow-lg);
+    }
+    .settings-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .settings-header h3 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--primary);
+    }
+    .settings-close-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 20px;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      line-height: 1;
+    }
+    .settings-close-btn:hover {
+      background: var(--dark);
+      color: var(--text);
+    }
+    .settings-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+    }
+    .settings-item + .settings-item {
+      border-top: 1px solid var(--border);
+    }
+    .settings-label {
+      font-size: 14px;
+      color: var(--text);
+    }
+    .settings-desc {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+    /* 开关样式 */
+    .toggle-switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--dark);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      transition: 0.2s;
+    }
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 2px;
+      bottom: 2px;
+      background: var(--text-dim);
+      border-radius: 50%;
+      transition: 0.2s;
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background: var(--btn-hover);
+      border-color: var(--primary);
+    }
+    .toggle-switch input:checked + .toggle-slider:before {
+      transform: translateX(20px);
+      background: var(--primary);
+    }
+    /* 主题切换按钮 */
+    .theme-toggle {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      padding: 4px 10px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+    .theme-toggle:hover {
+      background: var(--dark);
+      color: var(--text);
+      box-shadow: var(--btn-hover);
+    }
+    /* 窗口控制按钮 */
+    .window-controls {
+      display: flex;
+      gap: 2px;
+      margin-left: 8px;
+      -webkit-app-region: no-drag;
+    }
+    .titlebar .win-btn {
+      background: transparent;
+      border: none !important;
+      color: var(--text-dim);
+      width: 36px;
+      height: 28px;
+      cursor: pointer;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      transition: all 0.15s;
+      padding: 0;
+    }
+    .titlebar .win-btn:hover {
+      background: var(--btn-hover);
+      color: var(--text);
+    }
+    .titlebar .win-btn.close-btn:hover {
+      background: #e81123;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <!-- 标题栏 -->
+  <div class="titlebar">
+    <span class="logo">WEB SCOUT</span>
+    <div class="actions">
+      <button id="themeToggle" class="theme-toggle" onclick="toggleTheme()" title="切换主题">☀</button>
+      <button id="langToggle" onclick="toggleLang()">中/EN</button>
+      <button id="settingsBtn" onclick="toggleSettings()" title="设置">⚙</button>
+      <div class="window-controls">
+        <button class="win-btn" onclick="minimizeWindow()" title="最小化">─</button>
+        <button class="win-btn" onclick="maximizeWindow()" title="最大化">□</button>
+        <button class="win-btn close-btn" onclick="closeWindow()" title="关闭">✕</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 搜索栏 -->
+  <div class="searchbar">
+    <button class="nav-btn" id="backBtn" onclick="goBack()" title="后退">◀</button>
+    <button class="nav-btn" id="forwardBtn" onclick="goForward()" title="前进">▶</button>
+    <input type="text" id="urlInput" placeholder="输入网址 (如 bilibili.com) 提取资源..." onkeydown="if(event.key==='Enter')loadUrl()">
+    <button class="btn btn-primary" id="fetchBtn" onclick="loadUrl()">提取资源</button>
+    <button class="btn btn-inspect" id="inspectToggle" onclick="toggleInspect()">提取模式</button>
+    <div style="position:relative;">
+      <button class="nav-btn" id="historyBtn" onclick="toggleHistoryDropdown()" title="历史记录"></button>
+      <div id="historyDropdown" style="display:none;position:absolute;top:100%;right:0;margin-top:4px;width:360px;max-height:400px;overflow-y:auto;background:var(--darker);border:1px solid var(--border);border-radius:var(--radius);z-index:1000;box-shadow:var(--shadow-lg);"></div>
+    </div>
+  </div>
+
+  <!-- 标签栏 -->
+  <div class="tab-bar" id="tabBar">
+    <button class="tab-add" onclick="addNewTab()" title="新建标签页">+</button>
+  </div>
+
+  <!-- SPA动态页面提示横幅 -->
+  <div class="spa-banner hidden" id="spaBanner">
+    <span class="spa-banner-icon">⚡</span>
+    <span class="spa-banner-text">检测到动态页面，资源将通过JavaScript提取</span>
+    <button class="spa-banner-close" onclick="hideSpaBanner()">×</button>
+  </div>
+
+  <!-- 主内容 -->
+  <div class="main-content">
+    <!-- 浏览器区域（BrowserView 由主进程管理，覆盖此区域） -->
+    <div class="webview-area" id="browserArea">
+      <!-- 空状态 -->
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">🔍</div>
+        <div class="empty-text">输入网址开始提取资源</div>
+        <div class="empty-hint">支持任意网站：B站、抖音、知乎、微博...</div>
+      </div>
+
+      <!-- 加载层 -->
+      <div class="loading-overlay hidden" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+      </div>
+    </div>
+
+    <!-- 右侧面板 -->
+    <div class="right-panel" id="rightPanel">
+      <div class="panel-header">
+        <span>📋 资源提取</span>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button id="sidebarToggle" onclick="toggleSidebar()" style="background:transparent;border:1px solid var(--border);color:var(--text-dim);padding:8px 16px;border-radius:8px;cursor:pointer;font-size:18px;font-weight:bold;min-width:48px;min-height:40px;display:flex;align-items:center;justify-content:center;" title="折叠/展开侧边栏">◀</button>
+          <span id="selectedCount" style="font-size:11px;color:var(--text-dim);">已选: 0</span>
+        </div>
+      </div>
+      
+      <!-- 资源面板（标签页布局） -->
+      <div class="layer-panels" id="layerPanels">
+        <!-- 固定信息区：页面标题 + 选中元素文本 -->
+        <div class="panel-info-fixed" id="panelInfoFixed">
+          <div class="info-row">
+            <span class="info-label">📄 页面标题</span>
+            <span class="info-value" id="infoPageTitle">--</span>
+          </div>
+          <div class="info-row" id="infoSelectedElementRow" style="display:none;">
+            <span class="info-label">🎯 选中元素</span>
+            <span class="info-value" id="infoSelectedElement">--</span>
+          </div>
+        </div>
+
+        <!-- Hover 预览面板（固定显示，抓取模式下更新内容） -->
+        <div class="hover-preview-panel" id="hoverPreviewPanel">
+          <div class="hover-preview-header">
+            <span class="hover-preview-label">🔍 悬停预览</span>
+            <span class="hover-preview-selector" id="hoverPreviewSelector">--</span>
+          </div>
+          <div class="hover-preview-body" id="hoverPreviewBody"><div class="hover-preview-empty">启用抓取模式后悬停元素查看预览</div></div>
+          <div class="hover-preview-hint">点击该区域将资源添加到已选</div>
+        </div>
+
+        <!-- 主标签栏 -->
+        <div class="resource-tabs" id="resourceTabs">
+          <div class="resource-tab" data-tab="resources" onclick="switchResourceTab('resources')">
+            <span> 资源</span><span class="tab-count" id="tabCountResources">0</span>
+          </div>
+          <div class="resource-tab active" data-tab="selected" onclick="switchResourceTab('selected')">
+            <span>✅ 已选</span><span class="tab-count" id="tabCountSelected">0</span>
+          </div>
+          <div class="resource-tab" data-tab="texts" onclick="switchResourceTab('texts')">
+            <span>📝 文本</span><span class="tab-count" id="tabCountTexts">0</span>
+          </div>
+        </div>
+
+        <!-- 资源标签页内容（含图片/视频/音频/链接子标签） -->
+        <div class="tab-pane" id="paneResources">
+          <div class="sub-tabs">
+            <div class="sub-tab active" data-subtab="images" onclick="switchSubTab('resources','images')">
+              <span>📷 图片</span><span class="sub-count" id="subImageCount">0</span>
+            </div>
+            <div class="sub-tab" data-subtab="videos" onclick="switchSubTab('resources','videos')">
+              <span>🎬 视频</span><span class="sub-count" id="subVideoCount">0</span>
+            </div>
+            <div class="sub-tab" data-subtab="audios" onclick="switchSubTab('resources','audios')">
+              <span>🎵 音频</span><span class="sub-count" id="subAudioCount">0</span>
+            </div>
+            <div class="sub-tab" data-subtab="links" onclick="switchSubTab('resources','links')">
+              <span>🔗 链接</span><span class="sub-count" id="subLinkCount">0</span>
+            </div>
+          </div>
+          <div class="sub-pane active" data-subpane="images">
+            <div class="resource-list" id="imageList"></div>
+          </div>
+          <div class="sub-pane" data-subpane="videos">
+            <div class="resource-list" id="videoList"></div>
+          </div>
+          <div class="sub-pane" data-subpane="audios">
+            <div class="resource-list" id="audioList"></div>
+          </div>
+          <div class="sub-pane" data-subpane="links">
+            <div class="resource-list list-mode" id="linkList"></div>
+          </div>
+        </div>
+
+        <!-- 已选资源标签页内容（点击元素提取，含图片/视频/音频/链接/文本子标签） -->
+        <div class="tab-pane active" id="paneSelected">
+          <div class="sub-tabs">
+            <div class="sub-tab active" data-subtab="selected-images" onclick="switchSubTab('selected','selected-images')">
+              <span>📷 图片</span><span class="sub-count" id="subSelectedImageCount">0</span>
+            </div>
+            <div class="sub-tab" data-subtab="selected-videos" onclick="switchSubTab('selected','selected-videos')">
+              <span>🎬 视频</span><span class="sub-count" id="subSelectedVideoCount">0</span>
+            </div>
+            <div class="sub-tab" data-subtab="selected-audios" onclick="switchSubTab('selected','selected-audios')">
+              <span>🎵 音频</span><span class="sub-count" id="subSelectedAudioCount">0</span>
+            </div>
+            <div class="sub-tab" data-subtab="selected-links" onclick="switchSubTab('selected','selected-links')">
+              <span>🔗 链接</span><span class="sub-count" id="subSelectedLinkCount">0</span>
+            </div>
+            <div class="sub-tab" data-subtab="selected-texts" onclick="switchSubTab('selected','selected-texts')">
+              <span>📝 文本</span><span class="sub-count" id="subSelectedTextCount">0</span>
+            </div>
+            <div class="sub-tab clear-all-tab" onclick="clearAllSelected()" style="margin-left:auto;color:var(--danger);" title="清空所有已选资源">
+              <span>✕ 全部取消</span>
+            </div>
+          </div>
+          <div class="sub-pane active" data-subpane="selected-images">
+            <div class="resource-list" id="selectedImageList"></div>
+          </div>
+          <div class="sub-pane" data-subpane="selected-videos">
+            <div class="resource-list" id="selectedVideoList"></div>
+          </div>
+          <div class="sub-pane" data-subpane="selected-audios">
+            <div class="resource-list" id="selectedAudioList"></div>
+          </div>
+          <div class="sub-pane" data-subpane="selected-links">
+            <div class="resource-list list-mode" id="selectedLinkList"></div>
+          </div>
+          <div class="sub-pane" data-subpane="selected-texts">
+            <div class="resource-list list-mode" id="selectedTextList"></div>
+          </div>
+        </div>
+
+        <!-- 文本标签页内容 -->
+        <div class="tab-pane" id="paneTexts">
+          <div class="resource-list list-mode" id="textList"></div>
+        </div>
+      </div>
+
+      <div class="panel-body" id="panelBody">
+        <!-- 隐藏的页面标题元素（供代码内部引用） -->
+        <div id="pageTitle" style="display:none;">--</div>
+
+        <!-- 选中元素信息 -->
+        <div id="selectedElementInfo"></div>
+
+        <!-- 导出操作（仅对已选资源生效） -->
+        <div class="layer-group">
+          <div class="layer-title">📤 导出已选资源</div>
+          <div class="export-actions">
+            <button onclick="exportToFolder()"> 导出到文件夹</button>
+            <button onclick="exportToWSW()">📦 导出为 .wsw 文件</button>
+            <button onclick="exportToExcel()">📊 导出为 Excel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 状态栏 -->
+  <div class="statusbar">
+    <span class="status-text" id="statusText">就绪</span>
+    <span id="pageUrl"></span>
+  </div>
+
+  <!-- 下载进度条 -->
+  <div class="progress-bar-container" id="progressBarContainer">
+    <div class="progress-bar-header">
+      <span id="progressTitle">正在下载...</span>
+      <span id="progressPercent">0%</span>
+    </div>
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill" id="progressBarFill"></div>
+    </div>
+    <div class="progress-bar-info">
+      <span id="progressDetail">0 MB / 0 MB</span>
+      <span id="progressStatus">准备中...</span>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- 导出对话框 -->
+  <div class="export-dialog-overlay" id="exportDialogOverlay">
+    <div class="export-dialog">
+      <div class="export-dialog-header">
+        <span class="export-dialog-title">导出资源</span>
+        <button class="export-dialog-close" onclick="closeExportDialog()">×</button>
+      </div>
+      <div class="export-dialog-content">
+        <div class="export-format-selector">
+          <div class="export-format-label">选择导出格式：</div>
+          <div class="export-format-options" id="exportFormatOptions">
+            <!-- 动态生成 -->
+          </div>
+        </div>
+        <div class="export-file-list" id="exportFileList">
+          <!-- 动态生成文件进度项 -->
+        </div>
+      </div>
+      <div class="export-dialog-footer">
+        <button class="export-dialog-btn secondary" onclick="closeExportDialog()">取消</button>
+        <button class="export-dialog-btn primary" id="startExportBtn" onclick="startExport()">开始导出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设置面板 -->
+  <div class="settings-overlay" id="settingsOverlay" onclick="closeSettingsOnOverlay(event)">
+    <div class="settings-panel">
+      <div class="settings-header">
+        <h3>⚙ 设置与仪表盘</h3>
+        <button class="settings-close-btn" onclick="toggleSettings()">×</button>
+      </div>
+      <div class="settings-content">
+        <!-- 仪表盘 -->
+        <div class="dashboard-section">
+          <div class="dashboard-title">📊 应用状态</div>
+          <div class="dashboard-grid">
+            <div class="dashboard-card">
+              <div class="dashboard-value" id="dashTotalResources">0</div>
+              <div class="dashboard-label">已提取资源</div>
+            </div>
+            <div class="dashboard-card">
+              <div class="dashboard-value" id="dashSelectedResources">0</div>
+              <div class="dashboard-label">已选资源</div>
+            </div>
+            <div class="dashboard-card">
+              <div class="dashboard-value" id="dashDownloadedSize">0 MB</div>
+              <div class="dashboard-label">已下载大小</div>
+            </div>
+            <div class="dashboard-card">
+              <div class="dashboard-value" id="dashExportCount">0</div>
+              <div class="dashboard-label">导出次数</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 设置项 -->
+        <div class="settings-section-title">⚙ 功能设置</div>
+        <div class="settings-item">
+          <div>
+            <div class="settings-label">浅色模式</div>
+            <div class="settings-desc">切换浅色/深色主题</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="lightThemeToggle" onchange="toggleThemeFromSettings()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-item">
+          <div>
+            <div class="settings-label">显示资源层</div>
+            <div class="settings-desc">在侧栏中显示图片/视频/音频/链接资源层</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="showResourceLayerToggle" onchange="toggleShowResourceLayer()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
