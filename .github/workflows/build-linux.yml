@@ -30,7 +30,7 @@ jobs:
         run: npm ci
 
       - name: Build Linux deb
-        run: npm run build:linux
+        run: npx electron-builder --linux --publish never
 
       - name: List build output
         run: |
