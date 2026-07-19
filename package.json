@@ -1,6 +1,6 @@
 {
   "name": "web-scout",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "可视化智能爬虫 - Web Scout",
   "main": "src/main/index.js",
   "scripts": {
