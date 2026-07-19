@@ -1,0 +1,33 @@
+{
+  "__type": "aiworkflow-task-config",
+  "__version": 1,
+  "exportedAt": "2026-07-19T00:00:00.000Z",
+  "task": {
+    "type": "template",
+    "name": "商品性价比分析",
+    "config": {
+      "sampleUrls": [
+        "https://item.jd.com/100012345678.html",
+        "https://detail.tmall.com/item.htm?id=612345678901"
+      ],
+      "fields": [
+        { "name": "商品名称", "selector": ".sku-name, .ItemHeader--mainTitle", "attr": "text", "extractType": "text" },
+        { "name": "价格", "selector": ".price, .ItemHeader--price", "attr": "text", "extractType": "text" },
+        { "name": "销量", "selector": ".comment-count, .ItemHeader--sellCount", "attr": "text", "extractType": "text" },
+        { "name": "评分", "selector": ".comment-star, .ItemHeader--rate", "attr": "text", "extractType": "text" },
+        { "name": "店铺名称", "selector": ".J-hover-shop, .ShopHeader--title", "attr": "text", "extractType": "text" },
+        { "name": "店铺评分", "selector": ".shop-level, .ShopHeader--rate", "attr": "text", "extractType": "text" },
+        { "name": "商品 URL", "selector": "link[rel=canonical], meta[property=og:url]", "attr": "href|content", "extractType": "link" },
+        { "name": "优惠信息", "selector": ".activity, .ItemHeader--activity", "attr": "text", "extractType": "text" }
+      ],
+      "urls": [],
+      "sourceTaskId": "",
+      "targetSourceTaskId": "",
+      "sourceField": "url",
+      "autoExport": false,
+      "exportFormat": "json",
+      "exportPath": ""
+    }
+  },
+  "_note": "适配京东/天猫/淘宝/拼多多，导入后可在 Excel 容器按性价比指数（评分/价格×100）排序，用 chartCard 按价格分箱统计"
+}

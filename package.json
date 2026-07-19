@@ -6,8 +6,6 @@
   "scripts": {
     "start": "electron .",
     "postinstall": "electron-builder install-app-deps",
-    "test:bili": "node test-bili-download.js",
-    "test:bilibili": "electron test-bilibili-download.js",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux"
@@ -22,9 +20,11 @@
   "license": "MIT",
   "devDependencies": {
     "electron": "^28.0.0",
-    "electron-builder": "^24.0.0"
+    "electron-builder": "^24.0.0",
+    "jsdom": "^29.1.1"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "docx": "^9.7.1",
     "pdfkit": "^0.19.1",
     "xlsx": "^0.18.5"
@@ -44,19 +44,42 @@
     "asar": true,
     "asarUnpack": [],
     "win": {
-      "target": [{"target": "nsis", "arch": ["x64"]}],
-      "icon": "assets/icon.ico",
-      "artifactName": "${productName}-${version}-Setup.${ext}"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
     },
     "linux": {
-      "target": [{"target": "deb", "arch": ["x64"]}],
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "assets/icon.png",
       "artifactName": "${productName}-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "perMachine": false
+      "perMachine": false,
+      "artifactName": "${productName}-${version}-Setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
     }
   }
 }

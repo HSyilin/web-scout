@@ -1,0 +1,30 @@
+{
+  "__type": "aiworkflow-task-config",
+  "__version": 1,
+  "exportedAt": "2026-07-19T00:00:00.000Z",
+  "task": {
+    "type": "template",
+    "name": "热门视频/帖子评论统计",
+    "config": {
+      "sampleUrls": [
+        "https://www.bilibili.com/video/BV1xx411c7mD",
+        "https://www.douyin.com/video/7234567890123456789"
+      ],
+      "fields": [
+        { "name": "评论内容", "selector": ".reply-content, .CommentItemContent", "attr": "text", "extractType": "text" },
+        { "name": "用户名", "selector": ".user-name, .CommentItemAuthor", "attr": "text", "extractType": "text" },
+        { "name": "IP 属地", "selector": ".reply-location, .CommentItemLocation", "attr": "text", "extractType": "text" },
+        { "name": "点赞数", "selector": ".reply-like, .CommentItemLike", "attr": "text", "extractType": "text" },
+        { "name": "回复时间", "selector": ".reply-time, .CommentItemTime", "attr": "text", "extractType": "text" }
+      ],
+      "urls": [],
+      "sourceTaskId": "",
+      "targetSourceTaskId": "",
+      "sourceField": "url",
+      "autoExport": false,
+      "exportFormat": "json",
+      "exportPath": ""
+    }
+  },
+  "_note": "适配 B站/抖音/快手/微博/知乎，导入后可在 HT 编辑器生成词云和高频词柱状图（用 textContainer + chartCard）"
+}

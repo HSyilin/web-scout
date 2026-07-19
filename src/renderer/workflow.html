@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>抓取信息卡片 - WebScout</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0a1a;color:#eee;min-height:100vh;display:flex;flex-direction:column;overflow:hidden}
+.topbar{height:48px;background:#12122e;border-bottom:1px solid #2a2a5a;display:flex;align-items:center;padding:0 16px;gap:12px;flex-shrink:0}
+.topbar-title{font-size:14px;font-weight:600;color:#81c784}
+.topbar-btn{background:none;border:1px solid #2a2a5a;color:#aaa;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:12px;transition:all .15s}
+.topbar-btn:hover{background:rgba(129,199,132,.1);border-color:#81c784;color:#fff}
+.topbar-btn.primary{background:#81c784;border-color:#81c784;color:#000}
+.topbar-btn.primary:hover{background:#66bb6a}
+.topbar-btn:disabled{opacity:.4;cursor:not-allowed}
+.topbar-sep{width:1px;height:24px;background:#2a2a5a}
+.selection-info{font-size:12px;color:#888;flex:1}
+.selection-info .count{color:#81c784;font-weight:600}
+.container{flex:1;display:flex;overflow:hidden}
+.sidebar{width:280px;background:#12122e;border-right:1px solid #2a2a5a;display:flex;flex-direction:column;flex-shrink:0}
+.sidebar-header{padding:16px;border-bottom:1px solid #2a2a5a}
+.sidebar-header h3{font-size:13px;color:#81c784;margin-bottom:8px}
+.sidebar-actions{display:flex;gap:6px;margin-top:8px}
+.sidebar-btn{flex:1;background:#0e0e24;border:1px solid #2a2a5a;color:#aaa;padding:5px 8px;border-radius:6px;cursor:pointer;font-size:11px}
+.sidebar-btn:hover{border-color:#81c784;color:#fff}
+.workflow-list{flex:1;overflow-y:auto;padding:8px}
+.workflow-item{background:#0e0e24;border:1px solid #2a2a5a;border-radius:8px;padding:12px;margin-bottom:8px;cursor:pointer;transition:all .15s}
+.workflow-item:hover{border-color:#81c784;background:#1a1a3e}
+.workflow-item.active{border-color:#81c784;background:rgba(129,199,132,.1)}
+.workflow-item-title{font-size:13px;font-weight:600;margin-bottom:4px;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.workflow-item-meta{font-size:11px;color:#666}
+
+/* 主内容区 */
+.main-content{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.content-header{padding:16px 24px;border-bottom:1px solid #2a2a5a;display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+.content-title{font-size:16px;font-weight:600}
+.content-actions{display:flex;gap:8px;align-items:center}
+.content-body{flex:1;overflow-y:auto;padding:24px}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#666}
+.empty-state-icon{font-size:64px;margin-bottom:16px;opacity:.3}
+.empty-state-text{font-size:14px;margin-bottom:8px}
+.empty-state-hint{font-size:12px;color:#444;max-width:400px;text-align:center;line-height:1.6}
+
+/* 图标网格布局 */
+.icon-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:16px;padding:8px}
+.icon-tile{background:#0e0e24;border:1px solid #2a2a5a;border-radius:12px;padding:16px 12px;cursor:pointer;transition:all .2s;display:flex;flex-direction:column;align-items:center;gap:8px;position:relative;user-select:none}
+.icon-tile:hover{border-color:#81c784;background:#161640;transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,.3)}
+.icon-tile.selected{border-color:#81c784;background:rgba(129,199,132,.08);box-shadow:0 0 0 2px rgba(129,199,132,.2)}
+.icon-tile-checkbox{position:absolute;top:8px;right:8px;width:18px;height:18px;accent-color:#81c784;cursor:pointer;z-index:2}
+.icon-tile-icon{font-size:36px;line-height:1;filter:drop-shadow(0 2px 4px rgba(0,0,0,.3))}
+.icon-tile-title{font-size:11px;color:#ccc;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;font-weight:500}
+.icon-tile-badge{font-size:9px;color:#81c784;background:rgba(129,199,132,.1);padding:2px 8px;border-radius:4px;text-transform:uppercase;letter-spacing:.5px}
+.icon-tile-badge.video{color:#3498db;background:rgba(52,152,219,.1)}
+.icon-tile-badge.image{color:#e94560;background:rgba(233,69,96,.1)}
+.icon-tile-badge.audio{color:#9b59b6;background:rgba(155,89,182,.1)}
+.icon-tile-badge.link{color:#2ecc71;background:rgba(46,204,113,.1)}
+.icon-tile-badge.text{color:#f39c12;background:rgba(243,156,18,.1)}
+
+/* 工作流详情卡 */
+.detail-info{background:#12122e;border:1px solid #2a2a5a;border-radius:10px;padding:16px;margin-bottom:20px}
+.detail-info-row{display:flex;gap:12px;padding:6px 0;font-size:12px}
+.detail-info-label{color:#888;min-width:60px;flex-shrink:0}
+.detail-info-value{color:#ddd;word-break:break-all;flex:1}
+.detail-info-value a{color:#81c784;text-decoration:none;border-bottom:1px dashed #81c784}
+.detail-info-value a:hover{color:#a5d6a7}
+
+/* 资源详情模态框 */
+.detail-modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:300;backdrop-filter:blur(4px)}
+.detail-modal.show{display:flex}
+.detail-modal-content{background:#12122e;border:1px solid #2a2a5a;border-radius:14px;padding:24px;min-width:480px;max-width:700px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.5)}
+.detail-modal-header{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #2a2a5a}
+.detail-modal-icon{font-size:28px}
+.detail-modal-title{font-size:16px;font-weight:600;flex:1;color:#fff;word-break:break-all}
+.detail-modal-close{background:none;border:none;color:#666;cursor:pointer;font-size:20px;padding:4px 8px;border-radius:6px}
+.detail-modal-close:hover{color:#fff;background:rgba(255,255,255,.08)}
+.detail-modal-body{overflow-y:auto;flex:1}
+.detail-modal-section{margin-bottom:16px}
+.detail-modal-section h4{font-size:11px;color:#81c784;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px}
+.detail-modal-content-text{font-size:13px;color:#ccc;line-height:1.7;white-space:pre-wrap;word-break:break-word;background:#0a0a14;border:1px solid #1a1a3a;border-radius:8px;padding:12px;max-height:300px;overflow-y:auto}
+.detail-modal-url{font-size:12px;color:#81c784;word-break:break-all;background:#0a0a14;border:1px solid #1a1a3a;border-radius:8px;padding:8px 12px}
+.detail-modal-url a{color:#81c784;text-decoration:none}
+.detail-modal-image{max-width:100%;max-height:300px;border-radius:8px;display:block;margin:0 auto}
+.detail-modal-footer{margin-top:16px;padding-top:12px;border-top:1px solid #2a2a5a;display:flex;gap:8px;justify-content:flex-end}
+
+/* AI 对话框 */
+.ai-panel{position:fixed;bottom:0;left:280px;right:0;background:#12122e;border-top:1px solid #2a2a5a;padding:16px 24px;z-index:100;transform:translateY(100%);transition:transform .3s}
+.ai-panel.show{transform:translateY(0)}
+.ai-panel-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.ai-panel-title{font-size:13px;color:#81c784;font-weight:600}
+.ai-panel-hint{font-size:11px;color:#666;flex:1}
+.ai-panel-close{background:none;border:none;color:#666;cursor:pointer;font-size:18px;padding:0 4px}
+.ai-panel-close:hover{color:#fff}
+.ai-chat{max-height:200px;overflow-y:auto;margin-bottom:12px;display:none}
+.ai-chat.show{display:block}
+.ai-msg{padding:8px 12px;border-radius:8px;margin-bottom:6px;font-size:12px;line-height:1.6;max-width:80%}
+.ai-msg.user{background:#1a1a3e;color:#fff;margin-left:auto}
+.ai-msg.bot{background:#0e0e24;color:#aaa;border:1px solid #2a2a5a}
+.ai-input-row{display:flex;gap:8px}
+.ai-input{flex:1;background:#0e0e24;border:1px solid #2a2a5a;color:#eee;padding:10px 14px;border-radius:8px;font-size:13px;outline:none}
+.ai-input:focus{border-color:#81c784}
+.ai-input::placeholder{color:#444}
+.ai-send{background:#81c784;border:none;color:#000;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600}
+.ai-send:hover{background:#66bb6a}
+.ai-send:disabled{opacity:.4;cursor:not-allowed}
+
+/* 导出格式选择 */
+.export-modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:200}
+.export-modal.show{display:flex}
+.export-modal-content{background:#12122e;border:1px solid #2a2a5a;border-radius:12px;padding:24px;min-width:400px;max-width:90vw}
+.export-modal-title{font-size:16px;font-weight:600;margin-bottom:4px;color:#81c784}
+.export-modal-subtitle{font-size:12px;color:#888;margin-bottom:16px}
+.export-format-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.export-format-btn{background:#0e0e24;border:1px solid #2a2a5a;border-radius:8px;padding:14px;cursor:pointer;transition:all .15s;display:flex;align-items:center;gap:12px}
+.export-format-btn:hover{border-color:#81c784;background:#1a1a3e}
+.export-format-icon{font-size:24px}
+.export-format-info{flex:1}
+.export-format-name{font-size:13px;font-weight:600;color:#fff}
+.export-format-desc{font-size:11px;color:#666;margin-top:2px}
+.export-modal-close{margin-top:12px;width:100%;background:none;border:1px solid #2a2a5a;color:#aaa;padding:8px;border-radius:6px;cursor:pointer;font-size:12px}
+.export-modal-close:hover{border-color:#81c784;color:#fff}
+
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#12122e;border:1px solid #2a2a5a;border-radius:8px;padding:12px 24px;font-size:13px;color:#fff;z-index:1000;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <button class="topbar-btn" onclick="goBack()">← 返回</button>
+  <div class="topbar-sep"></div>
+  <span class="topbar-title">抓取信息卡片</span>
+  <div class="selection-info" id="selectionInfo" style="display:none">已选 <span class="count" id="selectedCount">0</span> 项</div>
+  <button class="topbar-btn" onclick="toggleAiPanel()">🤖 AI 助手</button>
+  <button class="topbar-btn" id="selectAllBtn" onclick="toggleSelectAll()" style="display:none">全选</button>
+  <button class="topbar-btn primary" id="exportBtn" onclick="showExportModal()" style="display:none">导出选中</button>
+</div>
+<div class="container">
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <h3>工作流记录</h3>
+      <div class="sidebar-actions">
+        <button class="sidebar-btn" onclick="loadWorkflows()">🔄 刷新</button>
+        <button class="sidebar-btn" onclick="clearAllWorkflows()">🗑 清空</button>
+      </div>
+    </div>
+    <div class="workflow-list" id="workflowList"></div>
+  </div>
+  <div class="main-content">
+    <div class="content-header">
+      <div class="content-title" id="contentTitle">选择工作流</div>
+      <div class="content-actions" id="contentActions" style="display:none">
+        <button class="topbar-btn" onclick="deleteWorkflow()">🗑 删除</button>
+      </div>
+    </div>
+    <div class="content-body" id="contentBody">
+      <div class="empty-state">
+        <div class="empty-state-icon">🤖</div>
+        <div class="empty-state-text">选择一个工作流查看资源</div>
+        <div class="empty-state-hint">资源以图标方式排列，点击查看详情，勾选后导出为 TXT / JSON / MD / WSW / CSV 格式</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 资源详情模态框 -->
+<div class="detail-modal" id="detailModal">
+  <div class="detail-modal-content">
+    <div class="detail-modal-header">
+      <span class="detail-modal-icon" id="detailIcon">📄</span>
+      <span class="detail-modal-title" id="detailTitle">资源标题</span>
+      <button class="detail-modal-close" onclick="hideDetailModal()">×</button>
+    </div>
+    <div class="detail-modal-body" id="detailBody"></div>
+    <div class="detail-modal-footer">
+      <button class="topbar-btn" id="detailSendToWsw" onclick="sendToWswContainer()">📌 发送到WSW容器</button>
+      <button class="topbar-btn" id="detailToggleSelect" onclick="toggleDetailSelect()">勾选此项</button>
+      <button class="topbar-btn" onclick="hideDetailModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- AI 对话面板 -->
+<div class="ai-panel" id="aiPanel">
+  <div class="ai-panel-header">
+    <span class="ai-panel-title">🤖 AI 抓取助手</span>
+    <span class="ai-panel-hint">用自然语言描述你想要的内容，如"帮我抓取B站的视频"或"找一些产品图片"</span>
+    <button class="ai-panel-close" onclick="toggleAiPanel()">×</button>
+  </div>
+  <div class="ai-chat" id="aiChat"></div>
+  <div class="ai-input-row">
+    <input type="text" class="ai-input" id="aiInput" placeholder="描述你想要抓取的内容..." onkeydown="if(event.key==='Enter')sendAiMessage()">
+    <button class="ai-send" id="aiSend" onclick="sendAiMessage()">发送</button>
+  </div>
+</div>
+
+<!-- 导出格式选择 -->
+<div class="export-modal" id="exportModal">
+  <div class="export-modal-content">
+    <div class="export-modal-title">选择导出格式</div>
+    <div class="export-modal-subtitle" id="exportSubtitle">将导出选中的资源</div>
+    <div class="export-format-grid">
+      <div class="export-format-btn" onclick="doExport('txt')">
+        <span class="export-format-icon">📄</span>
+        <div class="export-format-info">
+          <div class="export-format-name">TXT 文本</div>
+          <div class="export-format-desc">AI 可识别的结构化文本</div>
+        </div>
+      </div>
+      <div class="export-format-btn" onclick="doExport('json')">
+        <span class="export-format-icon">📊</span>
+        <div class="export-format-info">
+          <div class="export-format-name">JSON 数据</div>
+          <div class="export-format-desc">完整结构化数据，适合程序处理</div>
+        </div>
+      </div>
+      <div class="export-format-btn" onclick="doExport('md')">
+        <span class="export-format-icon">📝</span>
+        <div class="export-format-info">
+          <div class="export-format-name">Markdown</div>
+          <div class="export-format-desc">可读性强的文档格式</div>
+        </div>
+      </div>
+      <div class="export-format-btn" onclick="doExport('wsw')">
+        <span class="export-format-icon">🎨</span>
+        <div class="export-format-info">
+          <div class="export-format-name">WSW 演示</div>
+          <div class="export-format-desc">可在 WSW 编辑器中打开的画布</div>
+        </div>
+      </div>
+      <div class="export-format-btn" onclick="doExport('csv')">
+        <span class="export-format-icon">📗</span>
+        <div class="export-format-info">
+          <div class="export-format-name">Excel 表格</div>
+          <div class="export-format-desc">CSV 格式，Excel 直接打开</div>
+        </div>
+      </div>
+    </div>
+    <button class="export-modal-close" onclick="hideExportModal()">取消</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let workflows=[],currentWorkflow=null,selectedResources=new Set(),currentDetailRes=null;
+const workflowList=document.getElementById('workflowList');
+const contentTitle=document.getElementById('contentTitle');
+const contentBody=document.getElementById('contentBody');
+const contentActions=document.getElementById('contentActions');
+const toast=document.getElementById('toast');
+const aiPanel=document.getElementById('aiPanel');
+const aiChat=document.getElementById('aiChat');
+const aiInput=document.getElementById('aiInput');
+const exportBtn=document.getElementById('exportBtn');
+const selectAllBtn=document.getElementById('selectAllBtn');
+const selectionInfo=document.getElementById('selectionInfo');
+const selectedCountEl=document.getElementById('selectedCount');
+const exportModal=document.getElementById('exportModal');
+const detailModal=document.getElementById('detailModal');
+
+const TYPE_ICONS={image:'🖼️',video:'🎬',audio:'🎵',link:'🔗',text:'📝'};
+const TYPE_LABELS={image:'图片',video:'视频',audio:'音频',link:'链接',text:'文本'};
+
+function showToast(msg){toast.textContent=msg;toast.classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>toast.classList.remove('show'),2500)}
+function esc(s){if(s===null||s===undefined)return'';const d=document.createElement('div');d.textContent=String(s);return d.innerHTML}
+function formatDate(iso){if(!iso)return'';const d=new Date(iso);return d.toLocaleString('zh-CN')}
+function goBack(){if(window.electronAPI&&window.electronAPI.goBack){window.electronAPI.goBack()}else{window.location.href='dashboard.html'}}
+
+// ===== 工作流列表 =====
+async function loadWorkflows(){
+  try{
+    const result=await window.electronAPI.getWorkflows();
+    if(result.success){workflows=result.data||[];renderWorkflowList()}
+  }catch(e){console.log('Load workflows failed:',e)}
+}
+
+function renderWorkflowList(){
+  workflowList.innerHTML='';
+  if(workflows.length===0){
+    workflowList.innerHTML='<div style="padding:24px;text-align:center;color:#666;font-size:12px">暂无工作流记录<br><br>抓取资源并导出后会自动记录</div>';
+    return;
+  }
+  workflows.forEach((wf,idx)=>{
+    const item=document.createElement('div');
+    item.className='workflow-item'+(currentWorkflow===wf?' active':'');
+    const resCount=wf.resources?wf.resources.length:0;
+    let typeStr='';
+    if(wf.resources){
+      const types={};
+      wf.resources.forEach(r=>{types[r.type]=(types[r.type]||0)+1});
+      typeStr=Object.keys(types).map(t=>(TYPE_ICONS[t]||'📄')+types[t]).join(' ');
+    }
+    item.innerHTML='<div class="workflow-item-title">'+esc(wf.title||'未命名')+'</div>'+
+      '<div class="workflow-item-meta">'+formatDate(wf.createdAt||wf.time)+' · '+resCount+'个 '+typeStr+'</div>';
+    item.onclick=()=>selectWorkflow(idx);
+    workflowList.appendChild(item);
+  });
+}
+
+function selectWorkflow(idx){
+  currentWorkflow=workflows[idx];
+  selectedResources.clear();
+  renderWorkflowList();
+  contentTitle.textContent=currentWorkflow.title||'未命名工作流';
+  contentActions.style.display='flex';
+  exportBtn.style.display='';
+  selectAllBtn.style.display='';
+  selectionInfo.style.display='';
+  renderIconGrid();
+  updateSelectionInfo();
+}
+
+// ===== 图标网格布局 =====
+function renderIconGrid(){
+  if(!currentWorkflow){return}
+  const wf=currentWorkflow;
+  let html='<div class="detail-info">';
+  html+='<div class="detail-info-row"><span class="detail-info-label">标题</span><span class="detail-info-value">'+esc(wf.title||'未命名')+'</span></div>';
+  if(wf.url){html+='<div class="detail-info-row"><span class="detail-info-label">来源</span><span class="detail-info-value"><a href="'+esc(wf.url)+'" target="_blank">'+esc(wf.url)+'</a></span></div>'}
+  html+='<div class="detail-info-row"><span class="detail-info-label">时间</span><span class="detail-info-value">'+formatDate(wf.createdAt||wf.time)+'</span></div>';
+  html+='</div>';
+
+  if(!wf.resources||wf.resources.length===0){
+    html+='<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">此工作流没有资源</div></div>';
+    contentBody.innerHTML=html;
+    return;
+  }
+
+  html+='<div class="icon-grid">';
+  wf.resources.forEach((res,i)=>{
+    const icon=TYPE_ICONS[res.type]||'📄';
+    const badge=TYPE_LABELS[res.type]||res.type||'未知';
+    const title=res.name||res.text||('资源 '+(i+1));
+    const isSelected=selectedResources.has(i);
+    html+='<div class="icon-tile'+(isSelected?' selected':'')+'" data-idx="'+i+'" onclick="onTileClick('+i+',event)">';
+    html+='<input type="checkbox" class="icon-tile-checkbox" '+(isSelected?'checked':'')+' onclick="onTileCheck('+i+',event)">';
+    html+='<div class="icon-tile-icon">'+icon+'</div>';
+    html+='<div class="icon-tile-title" title="'+esc(title)+'">'+esc(title)+'</div>';
+    html+='<div class="icon-tile-badge '+esc(res.type||'')+'">'+esc(badge)+'</div>';
+    html+='</div>';
+  });
+  html+='</div>';
+  contentBody.innerHTML=html;
+}
+
+// 点击图标 - 已选中则取消选中，未选中则打开详情
+function onTileClick(idx,event){
+  if(event.target.classList.contains('icon-tile-checkbox'))return;
+  if(selectedResources.has(idx)){
+    // 已选中的卡片，点击直接取消选中
+    selectedResources.delete(idx);
+    updateTileVisual(idx);
+    updateSelectionInfo();
+    showToast('已取消选中');
+  }else{
+    showDetailModal(idx);
+  }
+}
+
+// 点击复选框 - 切换选中
+function onTileCheck(idx,event){
+  event.stopPropagation();
+  if(selectedResources.has(idx)){
+    selectedResources.delete(idx);
+  }else{
+    selectedResources.add(idx);
+  }
+  updateTileVisual(idx);
+  updateSelectionInfo();
+}
+
+function updateTileVisual(idx){
+  const tile=document.querySelector('.icon-tile[data-idx="'+idx+'"]');
+  if(!tile)return;
+  const cb=tile.querySelector('.icon-tile-checkbox');
+  if(selectedResources.has(idx)){
+    tile.classList.add('selected');
+    if(cb)cb.checked=true;
+  }else{
+    tile.classList.remove('selected');
+    if(cb)cb.checked=false;
+  }
+}
+
+function updateSelectionInfo(){
+  const count=selectedResources.size;
+  selectedCountEl.textContent=count;
+  const total=currentWorkflow&&currentWorkflow.resources?currentWorkflow.resources.length:0;
+  selectAllBtn.textContent=(count===total&&total>0)?'取消全选':'全选';
+  exportBtn.textContent=count>0?('导出选中 '+count):'导出全部';
+}
+
+// 全选/取消全选
+function toggleSelectAll(){
+  if(!currentWorkflow||!currentWorkflow.resources)return;
+  const total=currentWorkflow.resources.length;
+  if(selectedResources.size===total){
+    selectedResources.clear();
+  }else{
+    currentWorkflow.resources.forEach((_,i)=>selectedResources.add(i));
+  }
+  renderIconGrid();
+  updateSelectionInfo();
+}
+
+// ===== 资源详情模态框 =====
+function showDetailModal(idx){
+  if(!currentWorkflow||!currentWorkflow.resources)return;
+  const res=currentWorkflow.resources[idx];
+  if(!res)return;
+  currentDetailRes=idx;
+  const icon=TYPE_ICONS[res.type]||'📄';
+  const title=res.name||res.text||('资源 '+(idx+1));
+  document.getElementById('detailIcon').textContent=icon;
+  document.getElementById('detailTitle').textContent=title;
+
+  let body='';
+  body+='<div class="detail-modal-section"><h4>基本信息</h4>';
+  body+='<div style="font-size:12px;color:#888;line-height:1.8">';
+  body+='类型: <span style="color:#81c784">'+esc(TYPE_LABELS[res.type]||res.type||'未知')+'</span><br>';
+  if(res.format)body+='格式: <span style="color:#ddd">'+esc(res.format)+'</span><br>';
+  if(res.streamType)body+='流类型: <span style="color:#ddd">'+esc(res.streamType)+'</span>';
+  body+='</div></div>';
+
+  if(res.url){
+    body+='<div class="detail-modal-section"><h4>超链接</h4>';
+    body+='<div class="detail-modal-url"><a href="'+esc(res.url)+'" target="_blank">'+esc(res.url)+'</a></div></div>';
+  }
+
+  if(res.type==='image'&&res.url){
+    body+='<div class="detail-modal-section"><h4>图片预览</h4>';
+    body+='<img class="detail-modal-image" src="'+esc(res.url)+'" alt="'+esc(title)+'" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'">';
+    body+='<div style="display:none;color:#666;text-align:center;padding:20px">图片无法加载</div></div>';
+  }
+
+  if(res.content){
+    body+='<div class="detail-modal-section"><h4>抓取内容</h4>';
+    body+='<div class="detail-modal-content-text">'+esc(res.content)+'</div></div>';
+  }else if(!res.url){
+    body+='<div class="detail-modal-section"><h4>内容</h4><div style="color:#666;font-size:12px">无内容</div></div>';
+  }
+
+  document.getElementById('detailBody').innerHTML=body;
+
+  // 更新勾选按钮
+  const toggleBtn=document.getElementById('detailToggleSelect');
+  if(selectedResources.has(idx)){
+    toggleBtn.textContent='取消勾选';
+    toggleBtn.classList.add('primary');
+  }else{
+    toggleBtn.textContent='勾选此项';
+    toggleBtn.classList.remove('primary');
+  }
+
+  detailModal.classList.add('show');
+}
+
+function hideDetailModal(){detailModal.classList.remove('show');currentDetailRes=null}
+
+// 发送到WSW容器（暂存链接数据，切换到WSW编辑器后点击容器应用）
+function sendToWswContainer(){
+  if(currentDetailRes===null||!currentWorkflow)return;
+  const res=currentWorkflow.resources[currentDetailRes];
+  if(!res)return;
+  // 暂存链接数据到 App.state
+  if(window.opener&&window.opener.App){
+    window.opener.App.state.pendingWswLink={
+      workflowId:currentWorkflow.id,
+      cardIndex:currentDetailRes,
+      resourceType:res.type,
+      resourceInfo:{name:res.name||res.text||'',url:res.url}
+    };
+  }else if(window.App){
+    window.App.state.pendingWswLink={
+      workflowId:currentWorkflow.id,
+      cardIndex:currentDetailRes,
+      resourceType:res.type,
+      resourceInfo:{name:res.name||res.text||'',url:res.url}
+    };
+  }
+  hideDetailModal();
+  // 切换到WSW编辑器模块
+  if(window.App&&window.App.switchModule){
+    window.App.switchModule('wsw');
+    setTimeout(()=>{
+      if(window.WSWEditor&&window.WSWEditor.state.doc){
+        window.WSWEditor.renderCanvas();
+        showToast('已暂存链接，请点击要链接的容器');
+      }else{
+        showToast('请先在WSW编辑器中创建文档并添加容器');
+      }
+    },300);
+  }else{
+    showToast('已暂存链接，请切换到WSW编辑器点击容器');
+  }
+}
+
+function toggleDetailSelect(){
+  if(currentDetailRes===null)return;
+  if(selectedResources.has(currentDetailRes)){
+    selectedResources.delete(currentDetailRes);
+  }else{
+    selectedResources.add(currentDetailRes);
+  }
+  updateTileVisual(currentDetailRes);
+  updateSelectionInfo();
+  // 更新按钮文本
+  const toggleBtn=document.getElementById('detailToggleSelect');
+  if(selectedResources.has(currentDetailRes)){
+    toggleBtn.textContent='取消勾选';
+    toggleBtn.classList.add('primary');
+  }else{
+    toggleBtn.textContent='勾选此项';
+    toggleBtn.classList.remove('primary');
+  }
+}
+
+// ===== 删除 =====
+function deleteWorkflow(){
+  if(!currentWorkflow)return;
+  if(!confirm('确定删除此工作流？'))return;
+  workflows=workflows.filter(w=>w!==currentWorkflow);
+  currentWorkflow=null;
+  selectedResources.clear();
+  saveWorkflows();
+  renderWorkflowList();
+  contentTitle.textContent='选择工作流';
+  contentActions.style.display='none';
+  exportBtn.style.display='none';
+  selectAllBtn.style.display='none';
+  selectionInfo.style.display='none';
+  contentBody.innerHTML='<div class="empty-state"><div class="empty-state-icon">🤖</div><div class="empty-state-text">选择一个工作流查看资源</div></div>';
+  showToast('已删除');
+}
+
+function clearAllWorkflows(){
+  if(workflows.length===0){showToast('没有可清空的记录');return}
+  if(!confirm('确定清空所有工作流记录？此操作不可撤销。'))return;
+  workflows=[];
+  currentWorkflow=null;
+  selectedResources.clear();
+  saveWorkflows();
+  renderWorkflowList();
+  contentTitle.textContent='选择工作流';
+  contentActions.style.display='none';
+  exportBtn.style.display='none';
+  selectAllBtn.style.display='none';
+  selectionInfo.style.display='none';
+  contentBody.innerHTML='<div class="empty-state"><div class="empty-state-icon">🤖</div><div class="empty-state-text">已清空所有记录</div></div>';
+  showToast('已清空');
+}
+
+async function saveWorkflows(){
+  try{await window.electronAPI.saveWorkflows(workflows)}catch(e){console.log('Save failed:',e)}
+}
+
+// ===== 导出（五种格式，仅导出选中资源）=====
+function showExportModal(){
+  if(!currentWorkflow){showToast('请先选择工作流');return}
+  const count=selectedResources.size;
+  const total=currentWorkflow.resources?currentWorkflow.resources.length:0;
+  const exportCount=count>0?count:total;
+  document.getElementById('exportSubtitle').textContent='将导出 '+exportCount+' 个资源（'+(count>0?'已选中':'全部')+'）';
+  exportModal.classList.add('show');
+}
+function hideExportModal(){exportModal.classList.remove('show')}
+
+async function doExport(format){
+  if(!currentWorkflow){showToast('请先选择工作流');return}
+  hideExportModal();
+  // 获取要导出的资源：优先选中的，否则全部
+  const indices=selectedResources.size>0?Array.from(selectedResources).sort((a,b)=>a-b):currentWorkflow.resources.map((_,i)=>i);
+  const selectedRes=indices.map(i=>currentWorkflow.resources[i]).filter(Boolean);
+  if(selectedRes.length===0){showToast('没有可导出的资源');return}
+  try{
+    const payload={workflow:currentWorkflow,selectedResources:selectedRes,format:format};
+    const result=await window.electronAPI.exportWorkflow(payload);
+    if(result.success){
+      const fmtNames={txt:'TXT',json:'JSON',md:'Markdown',wsw:'WSW',csv:'CSV/Excel'};
+      showToast('已导出 '+selectedRes.length+' 个资源为 '+(fmtNames[result.format]||result.format.toUpperCase())+' 格式');
+    }else if(result.error!=='取消'){showToast('导出失败: '+result.error)}
+  }catch(e){showToast('导出失败: '+e.message)}
+}
+
+// ===== AI 助手 =====
+function toggleAiPanel(){
+  aiPanel.classList.toggle('show');
+  if(aiPanel.classList.contains('show')){
+    aiChat.classList.add('show');
+    setTimeout(()=>aiInput.focus(),300);
+    if(aiChat.children.length===0){
+      addAiMessage('bot','你好！我是 AI 抓取助手。告诉我你想要抓取什么内容，我会根据历史记录帮你生成抓取清单。\n\n例如：\n• "帮我抓取B站视频"\n• "找一些产品图片"\n• "抓取网页上的文字内容"');
+    }
+  }
+}
+
+function addAiMessage(role,text){
+  const msg=document.createElement('div');
+  msg.className='ai-msg '+role;
+  msg.innerHTML=text.split('\n').map(line=>esc(line)).join('<br>');
+  aiChat.appendChild(msg);
+  aiChat.scrollTop=aiChat.scrollHeight;
+}
+
+async function sendAiMessage(){
+  const text=aiInput.value.trim();
+  if(!text)return;
+  aiInput.value='';
+  addAiMessage('user',text);
+  const sendBtn=document.getElementById('aiSend');
+  sendBtn.disabled=true;
+  sendBtn.textContent='分析中...';
+  await new Promise(r=>setTimeout(r,800));
+  const analysis=analyzeRequest(text);
+  addAiMessage('bot',analysis.message);
+  if(analysis.matches.length>0){
+    let listHtml='根据你的需求，推荐以下抓取方案：\n';
+    analysis.matches.forEach((m,i)=>{
+      listHtml+='\n['+(i+1)+'] '+m.title+' ('+m.resources.length+' 个资源)\n';
+      listHtml+='    来源: '+m.url+'\n';
+    });
+    listHtml+='\n点击左侧工作流列表查看详情，勾选需要的资源后导出。';
+    addAiMessage('bot',listHtml);
+  }
+  sendBtn.disabled=false;
+  sendBtn.textContent='发送';
+}
+
+// 分析用户请求，匹配历史工作流
+function analyzeRequest(text){
+  const lower=text.toLowerCase();
+  const matches=[];
+  const keywords={
+    '视频':['video','b站','bilibili','douyin','抖音','快手','youtube','视频'],
+    '图片':['image','图','img','photo','照片','产品图','海报'],
+    '音频':['audio','音乐','mp3','声音','音频'],
+    '链接':['link','超链接','url','网址'],
+    '文本':['text','文字','文章','内容','段落']
+  };
+  let wantedTypes=[];
+  for(const[type,kws]of Object.entries(keywords)){
+    if(kws.some(kw=>lower.includes(kw)))wantedTypes.push(type);
+  }
+  if(wantedTypes.length===0)wantedTypes=['image','video','audio','link','text'];
+  const sites={'b站':'bilibili','bilibili':'bilibili','抖音':'douyin','douyin':'douyin','快手':'kuaishou','淘宝':'taobao','天猫':'tmall','微博':'weibo','知乎':'zhihu'};
+  let wantedSite='';
+  for(const[name,site]of Object.entries(sites)){
+    if(lower.includes(name)){wantedSite=site;break}
+  }
+  workflows.forEach(wf=>{
+    if(!wf.resources)return;
+    if(wantedSite&&wf.url&&!wf.url.toLowerCase().includes(wantedSite))return;
+    const hasType=wf.resources.some(r=>wantedTypes.includes(r.type));
+    if(hasType)matches.push(wf);
+  });
+  if(matches.length===0){
+    let msg='我理解你想要';
+    if(wantedSite)msg+=' '+wantedSite+' 站点的';
+    msg+=' '+wantedTypes.map(t=>TYPE_LABELS[t]||t).join('、')+' 类型资源。';
+    msg+='\n\n当前没有匹配的历史工作流。';
+    msg+='\n你可以：';
+    msg+='\n1. 前往「可视化抓取」模块抓取相关页面';
+    msg+='\n2. 抓取并导出后，工作流会自动记录到这里';
+    msg+='\n3. 之后再次询问我，就能找到匹配的方案了';
+    return{message:msg,matches:[]};
+  }
+  let msg='已分析你的需求：';
+  if(wantedSite)msg+='\n• 站点: '+wantedSite;
+  msg+='\n• 类型: '+wantedTypes.map(t=>TYPE_LABELS[t]||t).join('、');
+  msg+='\n• 找到 '+matches.length+' 个匹配的工作流';
+  return{message:msg,matches:matches.slice(0,5)};
+}
+
+// 点击模态框外部关闭
+detailModal.addEventListener('click',e=>{if(e.target===detailModal)hideDetailModal()});
+exportModal.addEventListener('click',e=>{if(e.target===exportModal)hideExportModal()});
+
+// ESC 关闭模态框
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    if(detailModal.classList.contains('show'))hideDetailModal();
+    if(exportModal.classList.contains('show'))hideExportModal();
+  }
+});
+
+// 初始化
+loadWorkflows();
+</script>
+</body>
+</html>

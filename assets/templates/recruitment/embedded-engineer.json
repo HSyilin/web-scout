@@ -1,0 +1,37 @@
+{
+  "__type": "aiworkflow-task-config",
+  "__version": 1,
+  "exportedAt": "2026-07-19T00:00:00.000Z",
+  "task": {
+    "type": "template",
+    "name": "嵌入式工程师招聘抓取",
+    "config": {
+      "sampleUrls": [
+        "https://www.zhipin.com/web/geek/job?query=嵌入式&city=100010000",
+        "https://www.zhipin.com/web/geek/job?query=嵌入式工程师&city=101010100"
+      ],
+      "fields": [
+        { "name": "职位名称", "selector": ".job-name", "attr": "text", "extractType": "text" },
+        { "name": "薪资范围", "selector": ".salary", "attr": "text", "extractType": "text" },
+        { "name": "工作地区", "selector": ".job-area-wrapper", "attr": "text", "extractType": "text" },
+        { "name": "学历要求", "selector": ".job-info .info-text", "attr": "text", "extractType": "text" },
+        { "name": "经验要求", "selector": ".job-info .info-text", "attr": "text", "extractType": "text" },
+        { "name": "职位描述", "selector": ".job-sec-text", "attr": "text", "extractType": "text" },
+        { "name": "技能关键词", "selector": ".job-tags .job-tag", "attr": "text", "extractType": "text" },
+        { "name": "公司名称", "selector": ".company-info .company-name", "attr": "text", "extractType": "text" },
+        { "name": "公司规模", "selector": ".company-info .company-text", "attr": "text", "extractType": "text" },
+        { "name": "公司行业", "selector": ".company-info .company-text", "attr": "text", "extractType": "text" },
+        { "name": "融资阶段", "selector": ".company-info .company-text", "attr": "text", "extractType": "text" },
+        { "name": "招聘来源", "selector": "body", "attr": "text", "extractType": "text" }
+      ],
+      "urls": [],
+      "sourceTaskId": "",
+      "targetSourceTaskId": "",
+      "sourceField": "url",
+      "autoExport": false,
+      "exportFormat": "json",
+      "exportPath": ""
+    }
+  },
+  "_note": "此模板适配 BOSS 直聘、智联、前程无忧，用户需登录后抓取，可在 HT 编辑器用统计图按地区/薪资分布分析"
+}

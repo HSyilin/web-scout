@@ -4,3 +4,10 @@ dist/
 *.log
 Thumbs.db
 desktop.ini
+
+# Electron 构建缓存
+.electron-cache/
+.electron-builder-cache/
+
+# 临时测试脚本
+test-*.js

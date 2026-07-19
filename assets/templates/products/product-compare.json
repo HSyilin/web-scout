@@ -1,0 +1,36 @@
+{
+  "__type": "aiworkflow-task-config",
+  "__version": 1,
+  "exportedAt": "2026-07-19T00:00:00.000Z",
+  "task": {
+    "type": "template",
+    "name": "同类商品横向对比",
+    "config": {
+      "sampleUrls": [
+        "https://item.jd.com/100012345678.html",
+        "https://detail.tmall.com/item.htm?id=612345678901"
+      ],
+      "fields": [
+        { "name": "商品名称", "selector": ".sku-name, .ItemHeader--mainTitle", "attr": "text", "extractType": "text" },
+        { "name": "价格", "selector": ".price, .ItemHeader--price", "attr": "text", "extractType": "text" },
+        { "name": "销量", "selector": ".comment-count, .ItemHeader--sellCount", "attr": "text", "extractType": "text" },
+        { "name": "评分", "selector": ".comment-star, .ItemHeader--rate", "attr": "text", "extractType": "text" },
+        { "name": "店铺名称", "selector": ".J-hover-shop, .ShopHeader--title", "attr": "text", "extractType": "text" },
+        { "name": "店铺评分", "selector": ".shop-level, .ShopHeader--rate", "attr": "text", "extractType": "text" },
+        { "name": "商品 URL", "selector": "link[rel=canonical], meta[property=og:url]", "attr": "href|content", "extractType": "link" },
+        { "name": "优惠信息", "selector": ".activity, .ItemHeader--activity", "attr": "text", "extractType": "text" },
+        { "name": "品牌名", "selector": ".brand, .ItemHeader--brand", "attr": "text", "extractType": "text" },
+        { "name": "规格", "selector": ".sku-params, .ItemHeader--sku", "attr": "text", "extractType": "text" },
+        { "name": "售后服务", "selector": ".service, .ItemHeader--service", "attr": "text", "extractType": "text" }
+      ],
+      "urls": [],
+      "sourceTaskId": "",
+      "targetSourceTaskId": "",
+      "sourceField": "url",
+      "autoExport": false,
+      "exportFormat": "json",
+      "exportPath": ""
+    }
+  },
+  "_note": "用于同类商品横向对比（如多个手机型号），可在 HT 编辑器用饼图展示品牌分布、用柱状图对比价格/评分"
+}

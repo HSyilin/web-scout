@@ -1,0 +1,1162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WSW 编辑器 - WebScout</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0a1a;color:#eee;overflow:hidden;user-select:none}
+.topbar{position:fixed;top:0;left:0;right:0;height:48px;background:#12122e;border-bottom:1px solid #2a2a5a;display:flex;align-items:center;padding:0 16px;gap:12px;z-index:100}
+.topbar-title{font-size:14px;font-weight:600;color:#e94560}
+.topbar-btn{background:none;border:1px solid #2a2a5a;color:#aaa;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:12px;transition:all .15s}
+.topbar-btn:hover{background:rgba(233,69,96,.1);border-color:#e94560;color:#fff}
+.topbar-btn.primary{background:#e94560;border-color:#e94560;color:#fff}
+.topbar-btn.primary:hover{background:#d63851}
+.topbar-sep{width:1px;height:24px;background:#2a2a5a}
+#canvas{position:absolute;top:48px;left:0;right:0;bottom:0;overflow:hidden;cursor:default}
+#canvas.panning{cursor:grabbing}
+#canvas-inner{position:absolute;transform-origin:0 0;will-change:transform}
+.grid-bg{position:absolute;top:-5000px;left:-5000px;width:10000px;height:10000px;background-image:radial-gradient(circle,#2a2a4a 1px,transparent 1px);background-size:30px 30px;pointer-events:none}
+
+/* 卡片通用 */
+.res-card,.text-box,.wsw-table,.shape-box,.image-box{position:absolute;background:#12122e;border:1px solid #2a2a5a;border-radius:10px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:box-shadow .15s,border-color .15s}
+.res-card:hover,.text-box:hover,.wsw-table:hover,.shape-box:hover,.image-box:hover{border-color:#3a3a6a}
+.selected{border-color:#e94560!important;box-shadow:0 0 0 2px rgba(233,69,96,.25),0 6px 20px rgba(0,0,0,.5)!important}
+.dragging{opacity:.85;box-shadow:0 12px 40px rgba(0,0,0,.6);transition:none;z-index:9999!important}
+.card-header{height:30px;background:linear-gradient(180deg,#161640,#0e0e24);display:flex;align-items:center;padding:0 10px;cursor:grab;gap:8px;flex-shrink:0;border-bottom:1px solid #1e1e4a}
+.card-header:active{cursor:grabbing}
+.card-title{font-size:11px;color:#bbb;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.card-body{padding:14px;font-size:13px;line-height:1.8;color:#ccc;overflow-y:auto;white-space:pre-wrap;word-break:break-word}
+.resize-handle{position:absolute;bottom:0;right:0;width:18px;height:18px;cursor:nwse-resize;z-index:5}
+.resize-handle::after{content:'';position:absolute;bottom:4px;right:4px;width:10px;height:10px;border-right:2px solid #444;border-bottom:2px solid #444}
+.snap-line{position:absolute;background:#e94560;z-index:9998;pointer-events:none;opacity:.6}
+.snap-line.horizontal{height:1px;left:0;right:0}
+.snap-line.vertical{width:1px;top:0;bottom:0}
+.toolbar{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(18,18,46,.92);backdrop-filter:blur(16px);border:1px solid #2a2a5a;border-radius:14px;padding:8px 18px;display:flex;align-items:center;gap:8px;z-index:1000}
+.tool-btn{background:none;border:1px solid transparent;color:#aaa;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:12px;transition:all .15s;white-space:nowrap}
+.tool-btn:hover{background:rgba(255,255,255,.06);color:#fff;border-color:#2a2a5a}
+.zoom-display{font-size:12px;color:#888;min-width:50px;text-align:center}
+.hint{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(18,18,46,.92);backdrop-filter:blur(12px);border:1px solid #2a2a5a;border-radius:10px;padding:10px 20px;font-size:12px;color:#aaa;z-index:1000;pointer-events:none;opacity:0;transition:opacity .3s}
+.hint.show{opacity:1}
+
+/* 文字框 */
+.text-box .card-body{padding:10px 14px;outline:none;user-select:text}
+.text-box.editing .card-body{background:#0e0e24;cursor:text;box-shadow:inset 0 0 0 1px #e94560;user-select:text}
+.text-box .card-body:empty:before{content:attr(data-placeholder);color:#555;font-style:italic}
+.md-toolbar{display:flex;gap:4px;align-items:center}
+.md-btn{background:none;border:1px solid #2a2a5a;color:#888;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;pointer-events:auto}
+.md-btn:hover{background:rgba(233,69,96,.1);color:#e94560;border-color:#e94560}
+.md-btn.active{background:rgba(233,69,96,.15);color:#e94560;border-color:#e94560}
+
+/* Markdown 渲染 */
+.text-box .card-body.markdown-view{padding:12px 16px;line-height:1.7;user-select:text}
+.text-box .card-body.markdown-view h1,.text-box .card-body.markdown-view h2,.text-box .card-body.markdown-view h3{color:#e94560;margin:10px 0 6px;font-weight:600;line-height:1.3}
+.text-box .card-body.markdown-view h1{font-size:18px;border-bottom:1px solid #2a2a5a;padding-bottom:4px}
+.text-box .card-body.markdown-view h2{font-size:16px}
+.text-box .card-body.markdown-view h3{font-size:14px;color:#f39c12}
+.text-box .card-body.markdown-view p{margin:6px 0;color:#ccc}
+.text-box .card-body.markdown-view strong{color:#fff;font-weight:600}
+.text-box .card-body.markdown-view em{color:#bbb;font-style:italic}
+.text-box .card-body.markdown-view ul,.text-box .card-body.markdown-view ol{margin:6px 0;padding-left:22px;color:#ccc}
+.text-box .card-body.markdown-view li{margin:3px 0}
+.text-box .card-body.markdown-view ul li{list-style:disc}
+.text-box .card-body.markdown-view ol li{list-style:decimal}
+.text-box .card-body.markdown-view blockquote{border-left:3px solid #e94560;padding:4px 12px;margin:8px 0;background:rgba(233,69,96,.06);color:#aaa}
+.text-box .card-body.markdown-view a{color:#3498db;text-decoration:none;border-bottom:1px dashed #3498db}
+.text-box .card-body.markdown-view hr{border:none;border-top:1px solid #2a2a5a;margin:10px 0}
+.text-box .card-body.markdown-view code:not(.hljs){background:#0e0e24;color:#e74c3c;padding:2px 6px;border-radius:4px;font-family:'Consolas','Monaco',monospace;font-size:12px}
+.text-box .card-body.markdown-view pre{background:#0a0a14;border:1px solid #1a1a3a;border-radius:8px;padding:12px;overflow:auto;margin:8px 0;position:relative}
+.text-box .card-body.markdown-view pre .code-lang{position:absolute;top:4px;right:8px;font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px}
+.text-box .card-body.markdown-view pre code{display:block;font-family:'Consolas','Monaco',monospace;font-size:12px;line-height:1.6;color:#ddd;white-space:pre}
+.hljs-keyword{color:#c678dd}
+.hljs-string{color:#98c379}
+.hljs-comment{color:#5c6370;font-style:italic}
+.hljs-number{color:#d19a66}
+.hljs-built_in{color:#61afef}
+.hljs-operator{color:#56b6c2}
+.hljs-attr{color:#d19a66}
+.hljs-variable{color:#e06c75}
+
+/* 表格 */
+.wsw-table .card-body{padding:8px;overflow:auto}
+.wsw-table table{border-collapse:collapse;width:100%;font-size:12px}
+.wsw-table th,.wsw-table td{border:1px solid #2a2a5a;padding:6px 10px;color:#ddd;min-width:60px;text-align:left}
+.wsw-table th{background:#161640;font-weight:600;color:#e94560}
+.wsw-table td[contenteditable=true],.wsw-table th[contenteditable=true]{outline:none;background:#0e0e24;user-select:text}
+.wsw-table td[contenteditable=true]:focus,.wsw-table th[contenteditable=true]:focus{background:#161640;box-shadow:inset 0 0 0 1px #e94560}
+.wsw-table .table-toolbar{display:flex;gap:4px;padding:4px 6px;background:#0e0e24;border-bottom:1px solid #1e1e4a}
+.wsw-table .tb-btn{background:none;border:1px solid #2a2a5a;color:#888;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;pointer-events:auto}
+.wsw-table .tb-btn:hover{background:rgba(233,69,96,.1);color:#e94560;border-color:#e94560}
+
+/* 形状 */
+.shape-box{border:none;background:transparent;box-shadow:none}
+.shape-box.selected{border:2px dashed #e94560;box-shadow:none!important;border-radius:4px}
+.shape-rect{width:100%;height:100%;background:#e94560;border-radius:8px}
+.shape-circle{width:100%;height:100%;background:#3498db;border-radius:50%}
+.shape-triangle{width:0;height:0;border-left:calc(var(--w)/2) solid transparent;border-right:calc(var(--w)/2) solid transparent;border-bottom:var(--h) solid #2ecc71}
+.shape-box .shape-label{position:absolute;bottom:-22px;left:50%;transform:translateX(-50%);font-size:10px;color:#888;background:rgba(18,18,46,.9);padding:2px 8px;border-radius:4px;white-space:nowrap}
+
+/* 图片 */
+.image-box{background:transparent;border:1px solid #2a2a5a}
+.image-box .card-body{padding:0;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.image-box img{max-width:100%;max-height:100%;object-fit:contain;display:block;pointer-events:none}
+.image-box .img-placeholder{color:#555;font-size:12px;padding:20px;text-align:center}
+
+/* 上下文菜单 */
+.context-menu{position:fixed;background:rgba(18,18,46,.96);backdrop-filter:blur(16px);border:1px solid #2a2a5a;border-radius:10px;padding:6px;z-index:10000;min-width:160px;box-shadow:0 8px 32px rgba(0,0,0,.6)}
+.context-menu-item{padding:8px 14px;font-size:12px;color:#ccc;cursor:pointer;border-radius:6px;display:flex;align-items:center;gap:8px}
+.context-menu-item:hover{background:rgba(233,69,96,.15);color:#fff}
+.context-menu-sep{height:1px;background:#2a2a5a;margin:4px 0}
+.context-menu-item.danger:hover{background:rgba(231,76,60,.2);color:#e74c3c}
+
+/* 属性面板 */
+.prop-panel{position:fixed;top:56px;right:16px;width:240px;background:rgba(18,18,46,.95);backdrop-filter:blur(16px);border:1px solid #2a2a5a;border-radius:12px;padding:14px;z-index:100;display:none}
+.prop-panel.show{display:block}
+.prop-title{font-size:11px;color:#888;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px}
+.prop-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px}
+.prop-row label{color:#aaa;min-width:60px}
+.prop-row input,.prop-row select{background:#0e0e24;border:1px solid #2a2a5a;color:#eee;padding:4px 8px;border-radius:6px;font-size:12px;flex:1;outline:none}
+.prop-row input:focus,.prop-row select:focus{border-color:#e94560}
+.prop-row input[type=color]{padding:2px;height:28px;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <button class="topbar-btn" onclick="goBack()">← 返回</button>
+  <div class="topbar-sep"></div>
+  <span class="topbar-title" id="docTitle">未命名 WSW</span>
+  <div class="topbar-sep"></div>
+  <button class="topbar-btn" onclick="newDoc()">新建</button>
+  <button class="topbar-btn" onclick="openDoc()">打开</button>
+  <button class="topbar-btn primary" onclick="saveDoc()">保存</button>
+  <input type="file" id="fileInput" accept=".wsw,.json" style="display:none">
+  <div class="topbar-sep"></div>
+  <button class="topbar-btn" onclick="setBackground()">背景</button>
+  <input type="file" id="imgInput" accept="image/*" style="display:none">
+</div>
+<div id="canvas"><div id="canvas-inner"><div class="grid-bg" id="gridBg"></div><div id="cards-container"></div><div id="snap-lines-container"></div></div></div>
+<div class="toolbar">
+  <button class="tool-btn" onclick="zoomOut()">−</button>
+  <span class="zoom-display" id="zoomDisplay">100%</span>
+  <button class="tool-btn" onclick="zoomIn()">+</button>
+  <button class="tool-btn" onclick="fitView()">适应</button>
+  <div class="topbar-sep"></div>
+  <button class="tool-btn" onclick="addTextBox()">📝 文字</button>
+  <button class="tool-btn" onclick="addTable()">📊 表格</button>
+  <button class="tool-btn" onclick="addShape('rect')">⬛ 矩形</button>
+  <button class="tool-btn" onclick="addShape('circle')">⚪ 圆形</button>
+  <button class="tool-btn" onclick="addShape('triangle')">🔺 三角</button>
+  <button class="tool-btn" onclick="addImage()">🖼 图片</button>
+  <div class="topbar-sep"></div>
+  <button class="tool-btn" onclick="toggleGrid()">网格</button>
+</div>
+<div class="prop-panel" id="propPanel">
+  <div class="prop-title" id="propTitle">属性</div>
+  <div id="propBody"></div>
+</div>
+<div class="hint" id="hint"></div>
+<div class="context-menu" id="contextMenu" style="display:none"></div>
+
+<script>
+// ===== 状态 =====
+let panX=0,panY=0,zoom=1,isPanning=false,panStartX=0,panStartY=0,spaceHeld=false;
+let dragCard=null,dragOffX=0,dragOffY=0,dragOrigX=0,dragOrigY=0;
+let resizeCard=null,resizeStartX=0,resizeStartY=0,resizeStartW=0,resizeStartH=0;
+let maxZ=1,selectedCards=new Set(),undoStack=[],currentDoc=null;
+let editingCardId=null; // 当前正在编辑的卡片 id
+
+const SNAP_DIST=10;
+const canvas=document.getElementById('canvas');
+const canvasInner=document.getElementById('canvas-inner');
+const cardsContainer=document.getElementById('cards-container');
+const snapContainer=document.getElementById('snap-lines-container');
+const zoomDisplay=document.getElementById('zoomDisplay');
+const hint=document.getElementById('hint');
+const gridBg=document.getElementById('gridBg');
+const propPanel=document.getElementById('propPanel');
+const propBody=document.getElementById('propBody');
+const propTitle=document.getElementById('propTitle');
+const contextMenu=document.getElementById('contextMenu');
+
+function showHint(msg){hint.textContent=msg;hint.classList.add('show');clearTimeout(hint._t);hint._t=setTimeout(()=>hint.classList.remove('show'),2500)}
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+// ===== 轻量级 Markdown 渲染 =====
+function renderMarkdown(src){
+  if(!src)return '';
+  // 1. 先提取代码块（在 esc 之前，保留原始代码用于高亮）
+  const codeBlocks=[];
+  src=src.replace(/```(\w*)\n?([\s\S]*?)```/g,(m,lang,code)=>{
+    const id='\u0000CB'+codeBlocks.length+'\u0000';
+    codeBlocks.push({id,lang:lang||'',code:code.replace(/\n$/,'')});
+    return id;
+  });
+  // 2. 转义 HTML（代码块占位符不含特殊字符，安全）
+  src=esc(src);
+  // 3. 标题（esc 后 # 不变）
+  src=src.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+  src=src.replace(/^## (.+)$/gm,'<h2>$1</h2>');
+  src=src.replace(/^# (.+)$/gm,'<h3>$1</h3>');
+  // 4. 分隔线
+  src=src.replace(/^---+$/gm,'<hr>');
+  // 5. 引用（esc 后 > 变成 &gt;）
+  src=src.replace(/^&gt; (.+)$/gm,'<blockquote>$1</blockquote>');
+  // 6. 粗体、斜体
+  src=src.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+  src=src.replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g,'$1<em>$2</em>');
+  // 7. 行内代码（esc 后反引号不变）
+  src=src.replace(/`([^`]+)`/g,'<code>$1</code>');
+  // 8. 链接
+  src=src.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');
+  // 9. 无序列表
+  src=src.replace(/(?:^[-*] (.+)$\n?)+/gm,m=>{
+    const items=m.trim().split('\n').map(l=>'<li>'+l.replace(/^[-*] /,'')+'</li>').join('');
+    return '<ul>'+items+'</ul>';
+  });
+  // 10. 有序列表
+  src=src.replace(/(?:^\d+\. (.+)$\n?)+/gm,m=>{
+    const items=m.trim().split('\n').map(l=>'<li>'+l.replace(/^\d+\. /,'')+'</li>').join('');
+    return '<ol>'+items+'</ol>';
+  });
+  // 11. 段落和换行
+  src=src.split(/\n\n+/).map(block=>{
+    if(/^<(h[123]|ul|ol|blockquote|hr|pre)/.test(block.trim()))return block;
+    if(block.trim()==='')return '';
+    return '<p>'+block.replace(/\n/g,'<br>')+'</p>';
+  }).join('\n');
+  // 12. 还原并渲染代码块（在最后，代码内容单独 esc + 高亮）
+  codeBlocks.forEach(cb=>{
+    const langLabel=cb.lang?'<span class="code-lang">'+esc(cb.lang)+'</span>':'';
+    const highlighted=syntaxHighlight(cb.code,cb.lang);
+    const html='<pre>'+langLabel+'<code class="hljs">'+highlighted+'</code></pre>';
+    src=src.replace(cb.id,html);
+  });
+  return src;
+}
+
+// ===== 语法高亮（输入原始代码，输出转义+高亮后的 HTML） =====
+function syntaxHighlight(code,lang){
+  // 先转义
+  let e=esc(code);
+  lang=(lang||'').toLowerCase();
+  // 使用占位符避免嵌套替换问题
+  const placeholders=[];
+  const protect=(html)=>{
+    const id='\u0000PH'+placeholders.length+'\u0000';
+    placeholders.push({id,html});
+    return id;
+  };
+  if(['bash','sh','shell'].includes(lang)){
+    // 注释
+    e=e.replace(/(#[^\n]*)/g,m=>protect('<span class="hljs-comment">'+m+'</span>'));
+    // 字符串（双引号或单引号，浏览器 esc 不转义引号本身）
+    e=e.replace(/("[^"\n]*"|'[^'\n]*')/g,m=>protect('<span class="hljs-string">'+m+'</span>'));
+    // 变量
+    e=e.replace(/(\$[A-Za-z_][A-Za-z0-9_]*)/g,m=>protect('<span class="hljs-variable">'+m+'</span>'));
+    e=e.replace(/(\$\{[^}]+\})/g,m=>protect('<span class="hljs-variable">'+m+'</span>'));
+    // 关键字
+    e=e.replace(/\b(if|then|else|fi|for|while|do|done|case|esac|in|function|return|export|echo|printf|read|cd|ls|mkdir|rm|cp|mv|cat|grep|awk|sed|chmod|chown|sudo|apt|yum|npm|node|python|git|docker|systemctl|service|ps|kill|tar|zip|unzip|wget|curl|ssh|scp|rsync|find|which|whereis|env|source|alias|let|local|declare)\b/g,m=>protect('<span class="hljs-keyword">'+m+'</span>'));
+    // 数字
+    e=e.replace(/\b(\d+)\b/g,m=>protect('<span class="hljs-number">'+m+'</span>'));
+    // 参数
+    e=e.replace(/(--?[a-zA-Z][a-zA-Z0-9-]*)/g,m=>protect('<span class="hljs-attr">'+m+'</span>'));
+    // 操作符（esc 后 < > & 变成实体）
+    e=e.replace(/(\|&gt;|&gt;&gt;|&gt;&amp;|&lt;&amp;|&gt;|&lt;|&amp;&amp;|\|\|)/g,m=>protect('<span class="hljs-operator">'+m+'</span>'));
+  }else if(['javascript','js','node'].includes(lang)){
+    e=e.replace(/(\/\/[^\n]*|\/\*[\s\S]*?\*\/)/g,m=>protect('<span class="hljs-comment">'+m+'</span>'));
+    e=e.replace(/("[^"\n]*"|'[^'\n]*'|`[^`]*`)/g,m=>protect('<span class="hljs-string">'+m+'</span>'));
+    e=e.replace(/\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|this|class|extends|super|import|export|default|try|catch|finally|throw|typeof|instanceof|in|of|delete|void|yield|async|await)\b/g,m=>protect('<span class="hljs-keyword">'+m+'</span>'));
+    e=e.replace(/\b(true|false|null|undefined|NaN|Infinity)\b/g,m=>protect('<span class="hljs-number">'+m+'</span>'));
+    e=e.replace(/\b(console|require|module|process|Buffer|Promise|Array|Object|String|Number|Boolean|Math|JSON|Date|RegExp|Map|Set)\b/g,m=>protect('<span class="hljs-built_in">'+m+'</span>'));
+    e=e.replace(/\b(\d+\.?\d*)\b/g,m=>protect('<span class="hljs-number">'+m+'</span>'));
+  }else if(['python','py'].includes(lang)){
+    e=e.replace(/(#[^\n]*)/g,m=>protect('<span class="hljs-comment">'+m+'</span>'));
+    e=e.replace(/(&quot;&quot;&quot;[\s\S]*?&quot;&quot;&quot;|&#39;&#39;&#39;[\s\S]*?&#39;&#39;&#39;)/g,m=>protect('<span class="hljs-string">'+m+'</span>'));
+    e=e.replace(/(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;)/g,m=>protect('<span class="hljs-string">'+m+'</span>'));
+    e=e.replace(/\b(def|class|if|else|elif|for|while|try|except|finally|return|import|from|as|with|lambda|pass|break|continue|raise|yield|global|nonlocal|assert|del|in|not|and|or|is|None|True|False)\b/g,m=>protect('<span class="hljs-keyword">'+m+'</span>'));
+    e=e.replace(/\b(print|len|range|str|int|float|list|dict|set|tuple|open|input|type|isinstance|enumerate|zip|map|filter|sorted|reversed|sum|min|max|abs|round)\b/g,m=>protect('<span class="hljs-built_in">'+m+'</span>'));
+    e=e.replace(/\b(\d+\.?\d*)\b/g,m=>protect('<span class="hljs-number">'+m+'</span>'));
+  }else{
+    e=e.replace(/(\/\/[^\n]*|#[^\n]*)/g,m=>protect('<span class="hljs-comment">'+m+'</span>'));
+    e=e.replace(/(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;)/g,m=>protect('<span class="hljs-string">'+m+'</span>'));
+    e=e.replace(/\b(\d+\.?\d*)\b/g,m=>protect('<span class="hljs-number">'+m+'</span>'));
+  }
+  // 还原占位符
+  placeholders.forEach(p=>{e=e.replace(p.id,p.html)});
+  return e;
+}
+
+// ===== 文档操作 =====
+function goBack(){if(window.electronAPI&&window.electronAPI.goBack){window.electronAPI.goBack()}else{window.location.href='dashboard.html'}}
+
+function newDoc(){
+  if(confirm('新建文档？未保存的内容将丢失。')){
+    currentDoc={title:'未命名 WSW',cards:[],background:{type:'color',value:'#1a1a2e'},showGrid:true};
+    document.getElementById('docTitle').textContent=currentDoc.title;
+    applyBackground();
+    renderCards();
+    showHint('已新建文档');
+  }
+}
+
+function openDoc(){document.getElementById('fileInput').click()}
+document.getElementById('fileInput').onchange=e=>{
+  const file=e.target.files[0];
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    try{
+      const data=JSON.parse(ev.target.result);
+      currentDoc=data;
+      document.getElementById('docTitle').textContent=data.title||'WSW';
+      applyBackground();
+      renderCards();
+      showHint('已打开: '+file.name);
+    }catch(err){showHint('打开失败: 文件格式错误')}
+  };
+  reader.readAsText(file);
+  e.target.value='';
+};
+
+function saveDoc(){
+  if(!currentDoc){showHint('请先新建或打开文档');return}
+  commitEdit();
+  const json=JSON.stringify(currentDoc,null,2);
+  const blob=new Blob([json],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=(currentDoc.title||'wsw')+'.wsw';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  showHint('已保存');
+}
+
+function applyBackground(){
+  if(!currentDoc||!currentDoc.background)return;
+  const bg=currentDoc.background;
+  if(bg.type==='color')canvas.style.background=bg.value;
+  else if(bg.type==='image'&&bg.value)canvas.style.background='url('+bg.value+') center/cover no-repeat';
+  else canvas.style.background='#0a0a1a';
+  gridBg.style.display=(currentDoc.showGrid!==false)?'':'none';
+}
+
+function setBackground(){
+  if(!currentDoc)currentDoc={title:'未命名 WSW',cards:[],background:{type:'color',value:'#1a1a2e'},showGrid:true};
+  const color=prompt('输入背景颜色（留空使用图片）:',currentDoc.background&&currentDoc.background.type==='color'?currentDoc.background.value:'#1a1a2e');
+  if(color===null)return;
+  if(color){
+    currentDoc.background={type:'color',value:color};
+    applyBackground();
+    showHint('背景已设置');
+  }else{
+    const inp=document.createElement('input');
+    inp.type='file';inp.accept='image/*';
+    inp.onchange=e=>{
+      const file=e.target.files[0];if(!file)return;
+      const reader=new FileReader();
+      reader.onload=ev=>{currentDoc.background={type:'image',value:ev.target.result};applyBackground();showHint('背景图片已设置')};
+      reader.readAsDataURL(file);
+    };
+    inp.click();
+  }
+}
+
+// ===== 渲染 =====
+function renderCards(){
+  commitEdit(); // 渲染前先提交编辑
+  cardsContainer.innerHTML='';
+  if(!currentDoc)return;
+  currentDoc.cards.forEach(card=>{
+    const el=createCardElement(card);
+    if(el)cardsContainer.appendChild(el);
+  });
+}
+
+function createCardElement(card){
+  const el=document.createElement('div');
+  el.className=getCardClassName(card);
+  if(selectedCards.has(card.id))el.classList.add('selected');
+  el.dataset.id=card.id;
+  el.style.left=card.x+'px';
+  el.style.top=card.y+'px';
+  el.style.width=card.w+'px';
+  el.style.height=card.h+'px';
+  el.style.zIndex=card.z||1;
+
+  if(card.type==='textbox'){
+    el.innerHTML=renderTextBox(card);
+  }else if(card.type==='table'){
+    el.innerHTML=renderTable(card);
+  }else if(card.type==='shape'){
+    el.innerHTML=renderShape(card);
+    el.style.setProperty('--w',card.w+'px');
+    el.style.setProperty('--h',card.h+'px');
+  }else if(card.type==='image'){
+    el.innerHTML=renderImage(card);
+  }else{
+    el.innerHTML='<div class="card-header"><span class="card-title">'+esc(card.name||card.type)+'</span></div><div class="card-body">'+esc(card.content||'')+'</div><div class="resize-handle"></div>';
+  }
+
+  bindCardEvents(el,card);
+  return el;
+}
+
+function getCardClassName(card){
+  if(card.type==='textbox')return 'text-box';
+  if(card.type==='table')return 'wsw-table';
+  if(card.type==='shape')return 'shape-box';
+  if(card.type==='image')return 'image-box';
+  return 'res-card';
+}
+
+function renderTextBox(card){
+  const isPreview=card.mdView!==false;
+  const bodyClass=isPreview?'card-body markdown-view':'card-body';
+  const bodyContent=isPreview?renderMarkdown(card.content||''):(card.content?esc(card.content):'');
+  const editBtnActive=!isPreview?' active':'';
+  const previewBtnActive=isPreview?' active':'';
+  return '<div class="card-header">'+
+    '<span class="card-title">'+esc(card.name||'文字框')+'</span>'+
+    '<div class="md-toolbar">'+
+      '<button class="md-btn'+editBtnActive+'" data-action="edit" data-id="'+card.id+'">✏️</button>'+
+      '<button class="md-btn'+previewBtnActive+'" data-action="preview" data-id="'+card.id+'">👁</button>'+
+    '</div></div>'+
+    '<div class="'+bodyClass+'" data-placeholder="双击编辑 Markdown...">'+bodyContent+'</div>'+
+    '<div class="resize-handle"></div>';
+}
+
+function renderTable(card){
+  let rows=card.tableData||parseTableContent(card.content);
+  if(!rows||rows.length===0)rows=[['列1','列2','列3'],['','','']];
+  card.tableData=rows;
+  let html='<div class="card-header"><span class="card-title">'+esc(card.name||'表格')+'</span></div>';
+  html+='<div class="table-toolbar">'+
+    '<button class="tb-btn" data-action="addRow" data-id="'+card.id+'">+行</button>'+
+    '<button class="tb-btn" data-action="addCol" data-id="'+card.id+'">+列</button>'+
+    '<button class="tb-btn" data-action="delRow" data-id="'+card.id+'">-行</button>'+
+    '<button class="tb-btn" data-action="delCol" data-id="'+card.id+'">-列</button>'+
+    '</div>';
+  html+='<div class="card-body"><table><thead><tr>';
+  rows[0].forEach((cell,i)=>{
+    html+='<th contenteditable="true" data-r="0" data-c="'+i+'">'+esc(cell)+'</th>';
+  });
+  html+='</tr></thead><tbody>';
+  for(let r=1;r<rows.length;r++){
+    html+='<tr>';
+    rows[r].forEach((cell,c)=>{
+      html+='<td contenteditable="true" data-r="'+r+'" data-c="'+c+'">'+esc(cell)+'</td>';
+    });
+    html+='</tr>';
+  }
+  html+='</tbody></table></div><div class="resize-handle"></div>';
+  return html;
+}
+
+function parseTableContent(content){
+  if(!content)return[['列1','列2','列3'],['','','']];
+  return content.split('\n').map(row=>row.split('\t'));
+}
+
+function renderShape(card){
+  const st=card.shapeType||'rect';
+  let inner='';
+  if(st==='rect')inner='<div class="shape-rect" style="background:'+(card.color||'#e94560')+'"></div>';
+  else if(st==='circle')inner='<div class="shape-circle" style="background:'+(card.color||'#3498db')+'"></div>';
+  else if(st==='triangle')inner='<div class="shape-triangle" style="border-bottom-color:'+(card.color||'#2ecc71')+'"></div>';
+  return inner+'<div class="shape-label">'+esc(card.name||st)+'</div><div class="resize-handle"></div>';
+}
+
+function renderImage(card){
+  let body=card.src?'<img src="'+card.src+'" alt="'+esc(card.name||'图片')+'">':'<div class="img-placeholder">双击选择图片</div>';
+  return '<div class="card-header"><span class="card-title">'+esc(card.name||'图片')+'</span></div><div class="card-body">'+body+'</div><div class="resize-handle"></div>';
+}
+
+// ===== 事件绑定 =====
+function bindCardEvents(el,card){
+  // 拖拽（header 或 shape 整体）
+  const dragHandler=(e)=>{
+    if(e.button!==0)return;
+    if(editingCardId!==null)return;
+    if(e.target.closest('[contenteditable=true]'))return;
+    if(e.target.closest('[data-action]'))return; // 工具栏按钮
+    if(e.target.classList.contains('resize-handle'))return;
+    e.preventDefault();
+    e.stopPropagation();
+    startDrag(e,el,card);
+  };
+
+  const header=el.querySelector('.card-header');
+  if(header){
+    header.addEventListener('mousedown',dragHandler);
+  }
+  if(card.type==='shape'){
+    el.addEventListener('mousedown',dragHandler);
+  }
+
+  // resize
+  const rh=el.querySelector('.resize-handle');
+  if(rh){
+    rh.addEventListener('mousedown',e=>{
+      if(e.button!==0)return;
+      e.preventDefault();e.stopPropagation();
+      saveUndo();
+      resizeCard=card;
+      resizeStartX=e.clientX;resizeStartY=e.clientY;
+      resizeStartW=card.w;resizeStartH=card.h;
+    });
+  }
+
+  // 选中（不在编辑/可编辑元素上时）
+  el.addEventListener('mousedown',e=>{
+    if(e.button!==0)return;
+    if(e.target.closest('[contenteditable=true]'))return;
+    if(e.target.closest('[data-action]'))return;
+    if(editingCardId!==null&&editingCardId!==card.id)return;
+    e.stopPropagation();
+    if(e.ctrlKey||e.metaKey){
+      if(selectedCards.has(card.id)){selectedCards.delete(card.id);el.classList.remove('selected')}
+      else{selectedCards.add(card.id);el.classList.add('selected')}
+    }else{
+      selectedCards.clear();
+      document.querySelectorAll('.selected').forEach(c=>c.classList.remove('selected'));
+      selectedCards.add(card.id);
+      el.classList.add('selected');
+    }
+    card.z=++maxZ;
+    el.style.zIndex=maxZ;
+    showPropPanel(card);
+  });
+
+  // 双击编辑
+  el.addEventListener('dblclick',e=>{
+    e.stopPropagation();
+    if(card.type==='textbox'){
+      enterTextEdit(card);
+    }else if(card.type==='table'){
+      showHint('点击单元格直接编辑');
+    }else if(card.type==='image'){
+      changeImage(card);
+    }else if(card.type==='shape'){
+      changeShapeColor(card);
+    }
+  });
+
+  // 工具栏按钮（用 mousedown 拦截，避免触发拖拽）
+  el.querySelectorAll('[data-action]').forEach(btn=>{
+    btn.addEventListener('mousedown',e=>{
+      e.stopPropagation();
+    });
+    btn.addEventListener('click',e=>{
+      e.stopPropagation();
+      const action=btn.dataset.action;
+      const id=parseInt(btn.dataset.id,10);
+      handleAction(action,id);
+    });
+  });
+
+  // 表格单元格
+  if(card.type==='table'){
+    el.querySelectorAll('[contenteditable=true]').forEach(cell=>{
+      cell.addEventListener('mousedown',e=>{
+        e.stopPropagation(); // 防止触发卡片选中/拖拽
+      });
+      cell.addEventListener('focus',()=>{
+        // 选中表格时显示属性面板
+        if(!selectedCards.has(card.id)){
+          selectedCards.clear();
+          document.querySelectorAll('.selected').forEach(c=>c.classList.remove('selected'));
+          selectedCards.add(card.id);
+          el.classList.add('selected');
+          showPropPanel(card);
+        }
+      });
+      cell.addEventListener('blur',()=>{
+        saveTableCell(card);
+      });
+      cell.addEventListener('keydown',e=>{
+        e.stopPropagation();
+        if(e.key==='Enter'&&!e.shiftKey){
+          e.preventDefault();
+          cell.blur();
+        }
+      });
+    });
+  }
+}
+
+function handleAction(action,id){
+  const card=currentDoc.cards.find(c=>c.id===id);
+  if(!card)return;
+  if(action==='edit'){
+    card.mdView=false;
+    renderCards();
+    enterTextEdit(card);
+  }else if(action==='preview'){
+    commitEdit();
+    card.mdView=true;
+    renderCards();
+    const el=document.querySelector('[data-id="'+id+'"]');
+    if(el)el.classList.add('selected');
+  }else if(action==='addRow'||action==='addCol'||action==='delRow'||action==='delCol'){
+    tableOp(card,action);
+  }
+}
+
+function startDrag(e,el,card){
+  saveUndo();
+  dragCard=card;
+  dragOrigX=card.x;
+  dragOrigY=card.y;
+  const r=el.getBoundingClientRect();
+  dragOffX=(e.clientX-r.left)/zoom;
+  dragOffY=(e.clientY-r.top)/zoom;
+  card.z=++maxZ;
+  el.style.zIndex=maxZ;
+  el.classList.add('dragging');
+}
+
+function saveUndo(){
+  if(!currentDoc)return;
+  undoStack.push(JSON.parse(JSON.stringify(currentDoc.cards)));
+  if(undoStack.length>50)undoStack.shift();
+}
+
+function undo(){
+  if(undoStack.length===0)return;
+  commitEdit();
+  currentDoc.cards=undoStack.pop();
+  selectedCards.clear();
+  renderCards();
+  hidePropPanel();
+  showHint('已撤销');
+}
+
+// ===== 文字框编辑 =====
+function enterTextEdit(card){
+  commitEdit(); // 先提交之前的编辑
+  editingCardId=card.id;
+  card.mdView=false;
+  // 重新渲染该单个卡片
+  const oldEl=document.querySelector('[data-id="'+card.id+'"]');
+  if(!oldEl)return;
+  const newEl=createCardElement(card);
+  newEl.classList.add('selected');
+  oldEl.replaceWith(newEl);
+  // 进入编辑
+  newEl.classList.add('editing');
+  const body=newEl.querySelector('.card-body');
+  body.contentEditable='true';
+  body.focus();
+  // 光标移到末尾
+  const range=document.createRange();
+  range.selectNodeContents(body);
+  range.collapse(false);
+  const sel=window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+
+  body.addEventListener('blur',()=>{
+    // 延迟提交，避免点击工具栏按钮时立即触发
+    setTimeout(()=>{
+      if(editingCardId===card.id){
+        commitEdit();
+      }
+    },150);
+  });
+
+  body.addEventListener('keydown',e=>{
+    e.stopPropagation();
+    if(e.key==='Escape'){
+      e.preventDefault();
+      body.blur();
+    }
+    if(e.key==='Tab'){
+      e.preventDefault();
+      document.execCommand('insertText',false,'\t');
+    }
+  });
+
+  // 阻止 body 内的 mousedown 冒泡到卡片
+  body.addEventListener('mousedown',e=>{
+    e.stopPropagation();
+  });
+
+  showHint('编辑中 · ESC 退出 · 支持 Markdown');
+}
+
+function commitEdit(){
+  if(editingCardId===null)return;
+  const card=currentDoc.cards.find(c=>c.id===editingCardId);
+  if(!card){editingCardId=null;return}
+  const el=document.querySelector('[data-id="'+editingCardId+'"]');
+  if(el){
+    el.classList.remove('editing');
+    const body=el.querySelector('.card-body');
+    if(body){
+      body.contentEditable='false';
+      card.content=body.innerText.replace(/\n$/,'');
+    }
+  }
+  card.mdView=true;
+  editingCardId=null;
+  // 重新渲染该卡片为预览模式
+  if(el){
+    const newEl=createCardElement(card);
+    newEl.classList.add('selected');
+    el.replaceWith(newEl);
+  }
+}
+
+// ===== 表格操作 =====
+function tableOp(card,op){
+  saveUndo();
+  const rows=card.tableData;
+  if(!rows)return;
+  if(op==='addRow')rows.push(rows[0].map(()=>''));
+  else if(op==='addCol')rows.forEach(row=>row.push(''));
+  else if(op==='delRow'){if(rows.length>1)rows.pop();else showHint('至少保留一行')}
+  else if(op==='delCol'){if(rows[0].length>1)rows.forEach(row=>row.pop());else showHint('至少保留一列')}
+  renderCards();
+  const el=document.querySelector('[data-id="'+card.id+'"]');
+  if(el)el.classList.add('selected');
+}
+
+function saveTableCell(card){
+  if(!card.tableData)return;
+  const el=document.querySelector('[data-id="'+card.id+'"]');
+  if(!el)return;
+  el.querySelectorAll('[contenteditable=true]').forEach(cell=>{
+    const r=parseInt(cell.dataset.r,10);
+    const c=parseInt(cell.dataset.c,10);
+    if(card.tableData[r]&&card.tableData[r][c]!==undefined){
+      card.tableData[r][c]=cell.innerText;
+    }
+  });
+}
+
+// ===== 图片 =====
+function addImage(){
+  const inp=document.getElementById('imgInput');
+  inp.onchange=e=>{
+    const file=e.target.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      if(!currentDoc)currentDoc={title:'未命名 WSW',cards:[],background:{type:'color',value:'#1a1a2e'},showGrid:true};
+      const cw=canvas.clientWidth,ch=canvas.clientHeight;
+      const cx=Math.round((-panX+cw/2)/zoom/SNAP_DIST)*SNAP_DIST;
+      const cy=Math.round((-panY+ch/2)/zoom/SNAP_DIST)*SNAP_DIST;
+      currentDoc.cards.push({id:Date.now(),type:'image',name:file.name,src:ev.target.result,x:cx-150,y:cy-100,w:300,h:200,z:++maxZ});
+      renderCards();
+      showHint('已添加图片');
+    };
+    reader.readAsDataURL(file);
+    e.target.value='';
+  };
+  inp.click();
+}
+
+function changeImage(card){
+  const inp=document.getElementById('imgInput');
+  inp.onchange=e=>{
+    const file=e.target.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      card.src=ev.target.result;
+      card.name=file.name;
+      renderCards();
+      const el=document.querySelector('[data-id="'+card.id+'"]');
+      if(el)el.classList.add('selected');
+      showHint('图片已更新');
+    };
+    reader.readAsDataURL(file);
+    e.target.value='';
+  };
+  inp.click();
+}
+
+// ===== 形状颜色 =====
+function changeShapeColor(card){
+  const color=prompt('输入颜色 (如 #e94560, red, #3498db):',card.color||'#e94560');
+  if(color){
+    card.color=color;
+    renderCards();
+    const el=document.querySelector('[data-id="'+card.id+'"]');
+    if(el)el.classList.add('selected');
+    showHint('颜色已更改');
+  }
+}
+
+// ===== 属性面板 =====
+function showPropPanel(card){
+  propPanel.classList.add('show');
+  propTitle.textContent='属性 · '+(card.name||card.type);
+  let html='';
+  html+='<div class="prop-row"><label>名称</label><input type="text" id="propName" value="'+esc(card.name||'')+'"></div>';
+  html+='<div class="prop-row"><label>X</label><input type="number" id="propX" value="'+card.x+'"></div>';
+  html+='<div class="prop-row"><label>Y</label><input type="number" id="propY" value="'+card.y+'"></div>';
+  html+='<div class="prop-row"><label>宽</label><input type="number" id="propW" value="'+card.w+'"></div>';
+  html+='<div class="prop-row"><label>高</label><input type="number" id="propH" value="'+card.h+'"></div>';
+  if(card.type==='shape')html+='<div class="prop-row"><label>颜色</label><input type="color" id="propColor" value="'+(card.color||'#e94560')+'"></div>';
+  propBody.innerHTML=html;
+  const bind=(id,prop,parser)=>{
+    const el=document.getElementById(id);
+    if(el)el.addEventListener('change',()=>{
+      card[prop]=parser?parser(el.value):el.value;
+      renderCards();
+      const re=document.querySelector('[data-id="'+card.id+'"]');
+      if(re)re.classList.add('selected');
+    });
+  };
+  bind('propName','name');
+  bind('propX','x',v=>parseInt(v,10)||0);
+  bind('propY','y',v=>parseInt(v,10)||0);
+  bind('propW','w',v=>parseInt(v,10)||100);
+  bind('propH','h',v=>parseInt(v,10)||100);
+  if(card.type==='shape')bind('propColor','color');
+}
+
+function hidePropPanel(){propPanel.classList.remove('show')}
+
+// ===== 鼠标交互 =====
+document.addEventListener('mousemove',e=>{
+  if(isPanning){
+    panX=e.clientX-panStartX;
+    panY=e.clientY-panStartY;
+    updateTransform();
+    return;
+  }
+  if(dragCard){
+    const cr=canvas.getBoundingClientRect();
+    const nx=(e.clientX-cr.left-panX)/zoom-dragOffX;
+    const ny=(e.clientY-cr.top-panY)/zoom-dragOffY;
+    const dx=Math.round(nx/SNAP_DIST)*SNAP_DIST-dragOrigX;
+    const dy=Math.round(ny/SNAP_DIST)*SNAP_DIST-dragOrigY;
+    selectedCards.forEach(id=>{
+      const c=currentDoc.cards.find(c=>c.id===id);
+      if(!c)return;
+      if(c===dragCard){c.x=Math.round(nx/SNAP_DIST)*SNAP_DIST;c.y=Math.round(ny/SNAP_DIST)*SNAP_DIST}
+      else{c.x=dragOrigX+dx;c.y=dragOrigY+dy}
+      const el=document.querySelector('[data-id="'+c.id+'"]');
+      if(el){el.style.left=c.x+'px';el.style.top=c.y+'px'}
+    });
+    showSnapLines();
+    return;
+  }
+  if(resizeCard){
+    const dw=(e.clientX-resizeStartX)/zoom;
+    const dh=(e.clientY-resizeStartY)/zoom;
+    resizeCard.w=Math.max(80,Math.round((resizeStartW+dw)/SNAP_DIST)*SNAP_DIST);
+    resizeCard.h=Math.max(40,Math.round((resizeStartH+dh)/SNAP_DIST)*SNAP_DIST);
+    const el=document.querySelector('[data-id="'+resizeCard.id+'"]');
+    if(el){
+      el.style.width=resizeCard.w+'px';
+      el.style.height=resizeCard.h+'px';
+      if(resizeCard.type==='shape'){
+        el.style.setProperty('--w',resizeCard.w+'px');
+        el.style.setProperty('--h',resizeCard.h+'px');
+        const tri=el.querySelector('.shape-triangle');
+        if(tri){
+          tri.style.borderLeftWidth=(resizeCard.w/2)+'px';
+          tri.style.borderRightWidth=(resizeCard.w/2)+'px';
+          tri.style.borderBottomWidth=resizeCard.h+'px';
+        }
+      }
+    }
+  }
+});
+
+document.addEventListener('mouseup',()=>{
+  if(isPanning){isPanning=false;canvas.classList.remove('panning')}
+  if(dragCard){
+    const el=document.querySelector('[data-id="'+dragCard.id+'"]');
+    if(el)el.classList.remove('dragging');
+    clearSnapLines();
+    dragCard=null;
+  }
+  if(resizeCard){
+    showPropPanel(resizeCard);
+    resizeCard=null;
+  }
+});
+
+canvas.addEventListener('mousedown',e=>{
+  if(e.button===1||(e.button===0&&spaceHeld)){
+    e.preventDefault();
+    isPanning=true;
+    panStartX=e.clientX-panX;
+    panStartY=e.clientY-panY;
+    canvas.classList.add('panning');
+    return;
+  }
+  if(e.button===0&&!e.target.closest('[data-id]')){
+    commitEdit();
+    selectedCards.clear();
+    document.querySelectorAll('.selected').forEach(c=>c.classList.remove('selected'));
+    hidePropPanel();
+    hideContextMenu();
+  }
+});
+
+canvas.addEventListener('dblclick',e=>{
+  if(e.target!==canvas&&!e.target.classList.contains('grid-bg')&&!e.target.classList.contains('cards-container'))return;
+  commitEdit();
+  const cr=canvas.getBoundingClientRect();
+  const x=Math.round((e.clientX-cr.left-panX)/zoom/SNAP_DIST)*SNAP_DIST;
+  const y=Math.round((e.clientY-cr.top-panY)/zoom/SNAP_DIST)*SNAP_DIST;
+  if(!currentDoc)currentDoc={title:'未命名 WSW',cards:[],background:{type:'color',value:'#1a1a2e'},showGrid:true};
+  const card={id:Date.now(),type:'textbox',name:'文字框',mdView:false,content:'',x,y,w:280,h:100,z:++maxZ};
+  currentDoc.cards.push(card);
+  renderCards();
+  enterTextEdit(card);
+});
+
+// ===== 右键菜单 =====
+canvas.addEventListener('contextmenu',e=>{
+  e.preventDefault();
+  const cardEl=e.target.closest('[data-id]');
+  if(!cardEl){hideContextMenu();return}
+  const cardId=parseInt(cardEl.dataset.id,10);
+  const card=currentDoc.cards.find(c=>c.id===cardId);
+  if(!card)return;
+  selectedCards.clear();
+  document.querySelectorAll('.selected').forEach(c=>c.classList.remove('selected'));
+  selectedCards.add(card.id);
+  cardEl.classList.add('selected');
+  showContextMenu(e.clientX,e.clientY,card);
+});
+
+function showContextMenu(x,y,card){
+  let items=[
+    {label:'✏️ 编辑',action:()=>{
+      if(card.type==='textbox')enterTextEdit(card);
+      else if(card.type==='image')changeImage(card);
+      else if(card.type==='shape')changeShapeColor(card);
+      else if(card.type==='table')showHint('点击单元格编辑');
+    }},
+    {label:'📋 复制',action:()=>duplicateCard(card)},
+    {label:'⬆️ 置顶',action:()=>{
+      card.z=++maxZ;
+      const el=document.querySelector('[data-id="'+card.id+'"]');
+      if(el)el.style.zIndex=maxZ;
+      showHint('已置顶');
+    }},
+    {sep:true},
+    {label:'🗑 删除',danger:true,action:()=>{
+      saveUndo();
+      currentDoc.cards=currentDoc.cards.filter(c=>c.id!==card.id);
+      selectedCards.delete(card.id);
+      renderCards();
+      hidePropPanel();
+      showHint('已删除');
+    }}
+  ];
+  contextMenu.innerHTML='';
+  items.forEach(item=>{
+    if(item.sep){
+      const sep=document.createElement('div');
+      sep.className='context-menu-sep';
+      contextMenu.appendChild(sep);
+    }else{
+      const el=document.createElement('div');
+      el.className='context-menu-item'+(item.danger?' danger':'');
+      el.textContent=item.label;
+      el.onclick=()=>{item.action();hideContextMenu()};
+      contextMenu.appendChild(el);
+    }
+  });
+  contextMenu.style.left=x+'px';
+  contextMenu.style.top=y+'px';
+  contextMenu.style.display='block';
+}
+
+function hideContextMenu(){contextMenu.style.display='none'}
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.context-menu'))hideContextMenu();
+});
+
+function duplicateCard(card){
+  saveUndo();
+  const newCard=JSON.parse(JSON.stringify(card));
+  newCard.id=Date.now();
+  newCard.x+=20;newCard.y+=20;
+  newCard.z=++maxZ;
+  currentDoc.cards.push(newCard);
+  renderCards();
+  showHint('已复制');
+}
+
+// ===== 键盘 =====
+document.addEventListener('keydown',e=>{
+  if(e.target.isContentEditable||e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
+  if(e.code==='Space'&&!e.repeat){e.preventDefault();spaceHeld=true;canvas.style.cursor='grab'}
+  if(e.key==='Delete'||e.key==='Backspace'){
+    e.preventDefault();
+    if(currentDoc&&selectedCards.size>0){
+      saveUndo();
+      currentDoc.cards=currentDoc.cards.filter(c=>!selectedCards.has(c.id));
+      selectedCards.clear();
+      renderCards();
+      hidePropPanel();
+    }
+  }
+  if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();undo()}
+  if((e.ctrlKey||e.metaKey)&&e.key==='d'){
+    e.preventDefault();
+    const first=currentDoc.cards.find(c=>selectedCards.has(c.id));
+    if(first)duplicateCard(first);
+  }
+  if(e.key==='Escape'){
+    commitEdit();
+    selectedCards.clear();
+    document.querySelectorAll('.selected').forEach(c=>c.classList.remove('selected'));
+    hidePropPanel();
+    hideContextMenu();
+  }
+});
+
+document.addEventListener('keyup',e=>{
+  if(e.code==='Space'){
+    spaceHeld=false;
+    canvas.style.cursor='';
+    if(isPanning){isPanning=false;canvas.classList.remove('panning')}
+  }
+});
+
+// ===== 缩放 =====
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const d=e.deltaY>0?-0.08:0.08;
+  const nz=Math.max(0.1,Math.min(5,zoom+d));
+  const r=canvas.getBoundingClientRect();
+  const mx=e.clientX-r.left,my=e.clientY-r.top;
+  panX=mx-(mx-panX)*(nz/zoom);
+  panY=my-(my-panY)*(nz/zoom);
+  zoom=nz;
+  updateTransform();
+},{passive:false});
+
+function updateTransform(){
+  canvasInner.style.transform='translate('+panX+'px,'+panY+'px) scale('+zoom+')';
+  zoomDisplay.textContent=Math.round(zoom*100)+'%';
+}
+
+function zoomIn(){zoomAtCenter(Math.min(5,zoom+0.2))}
+function zoomOut(){zoomAtCenter(Math.max(0.1,zoom-0.2))}
+function zoomAtCenter(nz){
+  const cw=canvas.clientWidth,ch=canvas.clientHeight;
+  panX=cw/2-(cw/2-panX)*(nz/zoom);
+  panY=ch/2-(ch/2-panY)*(nz/zoom);
+  zoom=nz;
+  updateTransform();
+}
+
+function fitView(){
+  if(!currentDoc||currentDoc.cards.length===0)return;
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  currentDoc.cards.forEach(c=>{
+    minX=Math.min(minX,c.x);
+    minY=Math.min(minY,c.y);
+    maxX=Math.max(maxX,c.x+c.w);
+    maxY=Math.max(maxY,c.y+c.h);
+  });
+  const pad=100,cw=canvas.clientWidth,ch=canvas.clientHeight;
+  zoom=Math.min(cw/(maxX-minX+pad*2),ch/(maxY-minY+pad*2),1.5);
+  panX=(cw-(maxX+minX)*zoom)/2;
+  panY=(ch-(maxY+minY)*zoom)/2;
+  updateTransform();
+}
+
+// ===== 添加元素 =====
+function addTextBox(){
+  if(!currentDoc)currentDoc={title:'未命名 WSW',cards:[],background:{type:'color',value:'#1a1a2e'},showGrid:true};
+  const cw=canvas.clientWidth,ch=canvas.clientHeight;
+  const cx=Math.round((-panX+cw/2)/zoom/SNAP_DIST)*SNAP_DIST;
+  const cy=Math.round((-panY+ch/2)/zoom/SNAP_DIST)*SNAP_DIST;
+  const card={id:Date.now(),type:'textbox',name:'文字框',mdView:false,content:'双击编辑文字',x:cx-140,y:cy-50,w:280,h:100,z:++maxZ};
+  currentDoc.cards.push(card);
+  renderCards();
+  showHint('已添加文字框 · 双击编辑');
+}
+
+function addTable(){
+  if(!currentDoc)currentDoc={title:'未命名 WSW',cards:[],background:{type:'color',value:'#1a1a2e'},showGrid:true};
+  const cw=canvas.clientWidth,ch=canvas.clientHeight;
+  const cx=Math.round((-panX+cw/2)/zoom/SNAP_DIST)*SNAP_DIST;
+  const cy=Math.round((-panY+ch/2)/zoom/SNAP_DIST)*SNAP_DIST;
+  const card={id:Date.now(),type:'table',name:'表格',tableData:[['列1','列2','列3'],['数据1','数据2','数据3']],x:cx-160,y:cy-80,w:320,h:140,z:++maxZ};
+  currentDoc.cards.push(card);
+  renderCards();
+  showHint('已添加表格 · 点击单元格编辑');
+}
+
+function addShape(type){
+  if(!currentDoc)currentDoc={title:'未命名 WSW',cards:[],background:{type:'color',value:'#1a1a2e'},showGrid:true};
+  const cw=canvas.clientWidth,ch=canvas.clientHeight;
+  const cx=Math.round((-panX+cw/2)/zoom/SNAP_DIST)*SNAP_DIST;
+  const cy=Math.round((-panY+ch/2)/zoom/SNAP_DIST)*SNAP_DIST;
+  const names={rect:'矩形',circle:'圆形',triangle:'三角形'};
+  const colors={rect:'#e94560',circle:'#3498db',triangle:'#2ecc71'};
+  const card={id:Date.now(),type:'shape',shapeType:type,name:names[type]||type,color:colors[type]||'#e94560',x:cx-60,y:cy-60,w:120,h:120,z:++maxZ};
+  currentDoc.cards.push(card);
+  renderCards();
+  showHint('已添加'+(names[type]||type)+' · 双击改颜色');
+}
+
+function toggleGrid(){
+  if(!currentDoc)currentDoc={showGrid:true};
+  currentDoc.showGrid=!currentDoc.showGrid;
+  gridBg.style.display=currentDoc.showGrid?'':'none';
+  showHint(currentDoc.showGrid?'网格已显示':'网格已隐藏');
+}
+
+// ===== 吸附线 =====
+function showSnapLines(){
+  clearSnapLines();
+  const draggingIds=new Set(selectedCards);
+  selectedCards.forEach(id=>{
+    const card=currentDoc.cards.find(c=>c.id===id);
+    if(!card)return;
+    const cx1=card.x,cy1=card.y,cx2=card.x+card.w,cy2=card.y+card.h;
+    currentDoc.cards.forEach(other=>{
+      if(draggingIds.has(other.id))return;
+      if(Math.abs(cy1-other.y)<SNAP_DIST)addSnapLine('horizontal',other.y);
+      if(Math.abs(cy2-(other.y+other.h))<SNAP_DIST)addSnapLine('horizontal',other.y+other.h);
+      if(Math.abs(cx1-other.x)<SNAP_DIST)addSnapLine('vertical',other.x);
+      if(Math.abs(cx2-(other.x+other.w))<SNAP_DIST)addSnapLine('vertical',other.x+other.w);
+    });
+  });
+}
+function addSnapLine(dir,pos){
+  const line=document.createElement('div');
+  line.className='snap-line '+dir;
+  if(dir==='horizontal')line.style.top=pos+'px';
+  else line.style.left=pos+'px';
+  snapContainer.appendChild(line);
+}
+function clearSnapLines(){snapContainer.innerHTML=''}
+
+// ===== 初始化 =====
+currentDoc={
+  title:'未命名 WSW',
+  cards:[
+    {id:1,type:'textbox',name:'欢迎使用',mdView:true,content:'# WSW 编辑器\n\n**支持 Markdown 语法**，双击文字框进入编辑。\n\n- 双击文字框编辑\n- 点击表格单元格编辑\n- 右键卡片查看菜单\n- 工具栏添加元素\n\n> 提示：✏️编辑 / 👁预览 切换模式',x:80,y:60,w:380,h:300,z:1},
+    {id:2,type:'textbox',name:'代码示例',mdView:true,content:'# Bash 示例\n\n```bash\n# 安装依赖\nnpm install --save-dev electron\n\n# 启动应用\nnpm start\n\n# 构建发布版本\nnpm run build\n```\n\n支持 `行内代码` 和 **粗体**。',x:80,y:380,w:380,h:340,z:2},
+    {id:3,type:'table',name:'示例表格',tableData:[['名称','数量','状态'],['苹果','5','✓'],['香蕉','3','✓'],['橙子','0','✗']],x:500,y:60,w:320,h:160,z:3},
+    {id:4,type:'shape',shapeType:'rect',name:'矩形',color:'#e94560',x:500,y:260,w:120,h:120,z:4},
+    {id:5,type:'shape',shapeType:'circle',name:'圆形',color:'#3498db',x:660,y:260,w:120,h:120,z:5},
+    {id:6,type:'shape',shapeType:'triangle',name:'三角形',color:'#2ecc71',x:580,y:420,w:120,h:120,z:6}
+  ],
+  background:{type:'color',value:'#0a0a1a'},
+  showGrid:true
+};
+document.getElementById('docTitle').textContent=currentDoc.title;
+applyBackground();
+renderCards();
+setTimeout(()=>{
+  fitView();
+  showHint('双击文字框编辑 · 双击画布添加 · 右键查看菜单');
+},400);
+</script>
+</body>
+</html>

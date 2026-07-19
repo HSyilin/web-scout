@@ -1,2864 +1,2207 @@
-// ============ WebScout - 智能资源提取器（三层资源面板 + 多标签页） ============
-
-// 全局状态
-let currentData = null;  // 当前活动标签的资源数据（引用）
-let selected = new Set(); // 当前活动标签的选中资源（引用）
-let lang = 'zh';
-let inspectMode = false;
-let sidebarVisible = true;
-let currentUrl = '';
-let showResourceLayer = false; // 显示资源层设置（默认隐藏）
-let currentTheme = 'dark'; // 当前主题：'dark' 或 'light'
-
-// 标签页状态（每个标签有独立的 BrowserView 和数据）
-let tabs = [];          // { id: number (主进程tabId), url, title, currentData, selected, selectedResources, pageHistory, historyIndex }
-let activeTabId = null; // 当前活动标签的主进程 tabId
-
-// 当前活动标签的已选资源（引用，与 tab.selectedResources 同步）
-// 结构: { images: [], videos: [], audios: [], links: [], texts: [] }
-let selectedResources = createEmptySelectedResources();
-
-function createEmptySelectedResources() {
-  return { images: [], videos: [], audios: [], links: [], texts: [] };
-}
-
-function getSelectedTotal() {
-  if (!selectedResources) return 0;
-  return selectedResources.images.length + selectedResources.videos.length +
-         selectedResources.audios.length + selectedResources.links.length +
-         selectedResources.texts.length;
-}
-
-// 全局浏览历史（所有标签共享，用于地址栏监听）
-let globalHistory = []; // 存储用户访问过的所有URL
-let historyIndex = -1;  // 当前在历史中的位置
-
-// DOM 元素
-const urlInput = document.getElementById('urlInput');
-const fetchBtn = document.getElementById('fetchBtn');
-const inspectToggle = document.getElementById('inspectToggle');
-const emptyState = document.getElementById('emptyState');
-const loadingOverlay = document.getElementById('loadingOverlay');
-const statusText = document.getElementById('statusText');
-const selectedCount = document.getElementById('selectedCount');
-const pageTitle = document.getElementById('pageTitle');
-const toast = document.getElementById('toast');
-const rightPanel = document.getElementById('rightPanel');
-const sidebarToggle = document.getElementById('sidebarToggle');
-const tabBar = document.getElementById('tabBar');
-
-// 进度条 DOM
-const progressBarContainer = document.getElementById('progressBarContainer');
-const progressBarFill = document.getElementById('progressBarFill');
-const progressPercent = document.getElementById('progressPercent');
-const progressDetail = document.getElementById('progressDetail');
-const progressTitle = document.getElementById('progressTitle');
-const progressStatus = document.getElementById('progressStatus');
-
-// 资源面板 DOM（标签页布局）
-const layerPanels = document.getElementById('layerPanels');
-const resourceTabs = document.getElementById('resourceTabs');
-// 固定信息区
-const infoPageTitle = document.getElementById('infoPageTitle');
-const infoSelectedElement = document.getElementById('infoSelectedElement');
-const infoSelectedElementRow = document.getElementById('infoSelectedElementRow');
-// 主标签页计数
-const tabCountResources = document.getElementById('tabCountResources');
-const tabCountSelected = document.getElementById('tabCountSelected');
-const tabCountTexts = document.getElementById('tabCountTexts');
-// 子标签页计数 - 资源
-const subImageCount = document.getElementById('subImageCount');
-const subVideoCount = document.getElementById('subVideoCount');
-const subAudioCount = document.getElementById('subAudioCount');
-const subLinkCount = document.getElementById('subLinkCount');
-// 子标签页计数 - 已选
-const subSelectedImageCount = document.getElementById('subSelectedImageCount');
-const subSelectedVideoCount = document.getElementById('subSelectedVideoCount');
-const subSelectedAudioCount = document.getElementById('subSelectedAudioCount');
-const subSelectedLinkCount = document.getElementById('subSelectedLinkCount');
-const subSelectedTextCount = document.getElementById('subSelectedTextCount');
-// 资源列表 - 资源标签页
-const imageList = document.getElementById('imageList');
-const videoList = document.getElementById('videoList');
-const audioList = document.getElementById('audioList');
-const linkList = document.getElementById('linkList');
-const textList = document.getElementById('textList');
-// 资源列表 - 已选标签页
-const selectedImageList = document.getElementById('selectedImageList');
-const selectedVideoList = document.getElementById('selectedVideoList');
-const selectedAudioList = document.getElementById('selectedAudioList');
-const selectedLinkList = document.getElementById('selectedLinkList');
-const selectedTextList = document.getElementById('selectedTextList');
-
-// ============ 辅助：获取当前活动标签 ============
-function getActiveTab() {
-  return tabs.find(t => t.id === activeTabId) || null;
-}
-
-// 更新页面标题（同时同步固定信息区）
-function setPageTitle(text) {
-  pageTitle.textContent = text || '--';
-  if (infoPageTitle) infoPageTitle.textContent = pageTitle.textContent || currentUrl || '--';
-}
-
-// ============ 国际化 ============
-const i18n = {
-  zh: {
-    ready: '就绪', loading: '正在加载页面...', extracting: '正在提取资源...',
-    done: '提取完成', error: '提取失败', noResources: '未找到资源',
-    images: '图片', videos: '视频', audios: '音频', links: '链接',
-    documents: '文档', texts: '文本', total: '总共', selected: '已选', items: '个资源',
-    exportFolder: ' 导出到文件夹', exportWSW: '📦 导出为 .wsw 文件',
-    exportExcel: '📊 导出为 Excel', downloadSelected: '⬇️ 下载选中资源',
-    fetchPlaceholder: '输入网址 (如 bilibili.com) 提取资源...',
-    fetchBtn: '提取资源', inspectMode: '提取模式',
-    emptyText: '输入网址开始提取资源',
-    emptyHint: '支持任意网站：B站、抖音、知乎、微博...',
-    pageInfo: '📋 资源提取', pageTitle: '📄 页面标题',
-    exportActions: '📤 导出操作', copied: '已复制到剪贴板', downloadStarted: '开始下载',
-    resourceLayer: '🖼 资源层', linkLayer: '🔗 超链接层', textLayer: '📝 文本层',
-    selectedElement: '🎯 选中元素', chars: '字符', newTab: '新建标签页'
+// WebScout 主应用逻辑
+const App = {
+  state: {
+    tabs: [],
+    activeTabId: null,
+    resources: { images: [], videos: [], audios: [], links: [], downloads: [], texts: [] },
+    selectedResources: { images: [], videos: [], audios: [], links: [], downloads: [], texts: [] },
+    inspectMode: false,
+    sidebarVisible: true,
+    theme: 'dark',
+    lang: 'zh',
+    history: [],
+    showResourceLayer: false,
+    currentModule: 'scraper',
+    downloadCancelled: false,
+    selectedFilter: '',
+    batchMode: false,
+    batchSelected: new Set(),
+    pendingWswLink: null  // 暂存的工作流→WSW容器链接 {workflowId, cardIndex, resourceType, resourceInfo}
   },
-  en: {
-    ready: 'Ready', loading: 'Loading page...', extracting: 'Extracting resources...',
-    done: 'Extraction complete', error: 'Extraction failed', noResources: 'No resources found',
-    images: 'Images', videos: 'Videos', audios: 'Audio', links: 'Links',
-    documents: 'Documents', texts: 'Text', total: 'Total', selected: 'Selected', items: 'items',
-    exportFolder: '📁 Export to folder', exportWSW: '📦 Export as .wsw',
-    exportExcel: ' Export to Excel', downloadSelected: '⬇️ Download selected',
-    fetchPlaceholder: 'Enter URL (e.g. example.com) to extract...',
-    fetchBtn: 'Extract', inspectMode: 'Inspect Mode',
-    emptyText: 'Enter a URL to start extracting',
-    emptyHint: 'Supports any website: YouTube, Twitter, Wikipedia...',
-    pageInfo: '📋 Resources', pageTitle: '📄 Page Title',
-    exportActions: '📤 Export', copied: 'Copied to clipboard', downloadStarted: 'Download started',
-    resourceLayer: ' Resources', linkLayer: '🔗 Links', textLayer: '📝 Texts',
-    selectedElement: '🎯 Selected Element', chars: 'chars', newTab: 'New Tab'
+
+  init() {
+    this.bindEvents();
+    this.loadSettings();
+    this.updateThemeUI();
+    // 同步资源层初始显示状态（开局默认隐藏资源层，只显示已选）
+    this.updateResourceLayerVisibility();
+
+    // 通知主进程渲染进程已就绪，触发初始标签创建
+    if (window.electronAPI?.rendererReady) {
+      window.electronAPI.rendererReady();
+    }
+
+    // 监听主进程创建的标签
+    if (window.electronAPI?.onTabCreated) {
+      window.electronAPI.onTabCreated((data) => {
+        const existing = this.state.tabs.find(t => t.id === data.tabId);
+        if (!existing) {
+          this.state.tabs.push({
+            id: data.tabId,
+            url: data.url,
+            title: data.title || '新标签页'
+          });
+          this.renderTabs();
+          // 初始标签（无活动标签）、通过超链接打开、或 window.open 触发的标签需要自动切换
+          if (!this.state.activeTabId || this.state._pendingSwitch || data.autoSwitch) {
+            this.switchToTab(data.tabId);
+            this.state._pendingSwitch = false;
+          }
+        }
+      });
+    }
+  },
+
+  bindEvents() {
+    // 窗口大小变化时更新 BrowserView
+    window.addEventListener('resize', () => {
+      if (this.state.currentModule === 'scraper' && window.electronAPI?.updateBrowserViewBounds) {
+        window.electronAPI.updateBrowserViewBounds();
+      }
+    });
+
+    // 键盘快捷键
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.key === 't') {
+        e.preventDefault();
+        this.addNewTab();
+      }
+      if (e.ctrlKey && e.key === 'w') {
+        e.preventDefault();
+        if (this.state.activeTabId) this.closeTab(this.state.activeTabId);
+      }
+    });
+
+    // 监听主进程事件
+    if (window.electronAPI) {
+      // 资源提取结果
+      window.electronAPI.onResourcesExtracted((resources, tabId) => {
+        // 类型保险：确保 tabId 为数字类型进行比较
+        const numericTabId = Number(tabId);
+        const numericActiveId = Number(this.state.activeTabId);
+        if (numericTabId === numericActiveId || this.state.activeTabId === null) {
+          this.processResources(resources);
+        }
+      });
+
+      // 页面标题
+      window.electronAPI.onPageTitle((title, tabId) => {
+        const tab = this.state.tabs.find(t => t.id === tabId);
+        if (tab) {
+          tab.title = title;
+          this.renderTabs();
+        }
+      });
+
+      // 页面标题更新
+      window.electronAPI.onBrowserPageTitleUpdated((title, tabId) => {
+        const tab = this.state.tabs.find(t => t.id === tabId);
+        if (tab) {
+          tab.title = title;
+          this.renderTabs();
+        }
+      });
+
+      // 页面加载完成
+      window.electronAPI.onBrowserDidFinishLoad((tabId) => {
+        if (tabId === this.state.activeTabId) {
+          this.showLoading(false);
+          this.setStatus('加载完成');
+        }
+      });
+
+      // 页面加载失败
+      window.electronAPI.onBrowserDidFailLoad((detail, tabId) => {
+        if (tabId === this.state.activeTabId) {
+          this.showLoading(false);
+          this.setStatus('加载失败');
+          this.showToast('页面加载失败');
+        }
+      });
+
+      // 页面导航
+      window.electronAPI.onBrowserDidNavigate((url, tabId) => {
+        if (tabId === this.state.activeTabId) {
+          const urlInput = document.getElementById('urlInput');
+          if (urlInput) urlInput.value = url;
+          this.addToHistory(url);
+        }
+      });
+
+      // 下载进度
+      window.electronAPI.onDownloadProgress((data) => {
+        this.updateDownloadProgress(data);
+      });
+
+      // 提取模式变化
+      window.electronAPI.onInspectModeChanged((enabled) => {
+        this.state.inspectMode = enabled;
+        const btn = document.getElementById('inspectToggle');
+        if (btn) btn.classList.toggle('active', enabled);
+      });
+
+      // 元素悬停预览
+      window.electronAPI.onElementHoverPreview((data) => {
+        this.updateHoverPreview(data);
+      });
+
+      // 元素悬停清除
+      window.electronAPI.onElementHoverClear(() => {
+        this.clearHoverPreview();
+      });
+
+      // 元素资源
+      window.electronAPI.onElementResources((data) => {
+        this.addElementResources(data);
+      });
+
+      // 网络拦截的媒体资源批量
+      if (window.electronAPI.onMediaBatch) {
+        window.electronAPI.onMediaBatch((mediaArray, tabId) => {
+          const numericTabId = Number(tabId);
+          const numericActiveId = Number(this.state.activeTabId);
+          if (numericTabId === numericActiveId || this.state.activeTabId === null) {
+            this.addMediaBatch(mediaArray);
+          }
+        });
+      }
+
+      // 超链接点击 - 创建新标签页
+      window.electronAPI.onLinkClicked((url, tabId) => {
+        if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+          this.addNewTab(url);
+        }
+      });
+    }
+  },
+
+  processResources(resources) {
+    if (!resources) return;
+
+    // 合并模式：不清空已有资源，去重后合并新资源
+    // 避免清空 addElementResources 和 addMediaBatch 添加的资源
+    let totalCount = 0;
+    let newCount = 0;
+
+    // 辅助函数：去重添加
+    const addUnique = (list, resource) => {
+      const matchKey = resource.url || resource.content;
+      if (!matchKey) return;
+      if (!list.find(r => (r.url || r.content) === matchKey)) {
+        list.push(resource);
+        newCount++;
+      }
+    };
+
+    if (Array.isArray(resources)) {
+      // 数组格式：每个元素有 type 属性
+      for (const resource of resources) {
+        const type = resource.type || 'image';
+        if (this.state.resources[type + 's']) {
+          addUnique(this.state.resources[type + 's'], resource);
+        } else if (type === 'text') {
+          addUnique(this.state.resources.texts, resource);
+        }
+        totalCount++;
+      }
+    } else {
+      // 对象格式：按类别处理
+      const typeMap = { images: 'image', videos: 'video', audios: 'audio', links: 'link', downloads: 'download', texts: 'text' };
+      for (const category in resources) {
+        if (!resources.hasOwnProperty(category)) continue;
+        const items = resources[category];
+        if (!Array.isArray(items)) continue;
+        const type = typeMap[category] || 'image';
+        for (const item of items) {
+          const resource = typeof item === 'string' ? { url: item, type } : { ...item, type };
+          if (this.state.resources[category]) {
+            addUnique(this.state.resources[category], resource);
+          }
+          totalCount++;
+        }
+      }
+    }
+
+    this.renderResources();
+    this.updateResourceCounts();
+    if (newCount > 0) {
+      this.setStatus(`提取完成 — 新增 ${newCount} 个资源`);
+    }
+  },
+
+  updateDownloadProgress(data) {
+    const container = document.getElementById('progressContainer');
+    if (!container) return;
+
+    if (data.status === 'start') {
+      container.classList.add('show');
+      document.getElementById('progressTitle').textContent = data.title || '正在下载…';
+    }
+
+    if (data.percent !== undefined) {
+      document.getElementById('progressPercent').textContent = Math.round(data.percent) + '%';
+      document.getElementById('progressFill').style.width = data.percent + '%';
+    }
+
+    if (data.downloaded !== undefined && data.total !== undefined) {
+      const downloadedMB = (data.downloaded / (1024 * 1024)).toFixed(1);
+      const totalMB = (data.total / (1024 * 1024)).toFixed(1);
+      document.getElementById('progressDetail').textContent = `${downloadedMB} MB / ${totalMB} MB`;
+    }
+
+    if (data.speed) {
+      document.getElementById('progressStatus').textContent = data.speed;
+    }
+
+    if (data.status === 'complete' || data.status === 'error') {
+      setTimeout(() => {
+        container.classList.remove('show');
+      }, 1500);
+    }
+  },
+
+  updateHoverPreview(data) {
+    const selector = document.getElementById('hoverPreviewSelector');
+    const body = document.getElementById('hoverPreviewBody');
+
+    if (selector) selector.textContent = data.selector || '--';
+    if (body) {
+      // 计算资源总数（resources 是对象，包含 images/videos/audios/links/texts 数组）
+      let totalCount = 0;
+      let textPreview = data.textPreview || '';
+      if (data.resources) {
+        const res = data.resources;
+        if (Array.isArray(res.images)) totalCount += res.images.length;
+        if (Array.isArray(res.videos)) totalCount += res.videos.length;
+        if (Array.isArray(res.audios)) totalCount += res.audios.length;
+        if (Array.isArray(res.links)) totalCount += res.links.length;
+        if (Array.isArray(res.texts)) totalCount += res.texts.length;
+      }
+      // 构建预览内容
+      let html = '<div style="font-size:11px;color:var(--text);line-height:1.6">';
+      if (totalCount > 0) {
+        html += `<div style="color:var(--accent);font-weight:600;margin-bottom:4px">${totalCount} 个资源</div>`;
+        // 显示各类型数量
+        const parts = [];
+        if (data.resources?.images?.length) parts.push('🖼️ ' + data.resources.images.length);
+        if (data.resources?.videos?.length) parts.push('🎬 ' + data.resources.videos.length);
+        if (data.resources?.audios?.length) parts.push('🎵 ' + data.resources.audios.length);
+        if (data.resources?.links?.length) parts.push('🔗 ' + data.resources.links.length);
+        if (data.resources?.texts?.length) parts.push('📝 ' + data.resources.texts.length);
+        if (parts.length > 0) {
+          html += '<div style="font-size:10px;color:var(--text2);margin-bottom:4px">' + parts.join(' · ') + '</div>';
+        }
+      } else {
+        html += '<div style="color:var(--text2)">无资源</div>';
+      }
+      // 显示文字预览
+      if (textPreview) {
+        html += '<div style="font-size:10px;color:var(--text2);margin-top:4px;border-top:1px solid var(--border);padding-top:4px;max-height:40px;overflow:hidden;word-break:break-all">' + this.escapeHtml(textPreview) + '</div>';
+      }
+      html += '</div>';
+      body.innerHTML = html;
+    }
+  },
+
+  clearHoverPreview() {
+    const selector = document.getElementById('hoverPreviewSelector');
+    const body = document.getElementById('hoverPreviewBody');
+
+    if (selector) selector.textContent = '--';
+    if (body) {
+      body.innerHTML = '<div class="hover-preview-empty">启用抓取模式后悬停元素查看预览</div>';
+    }
+  },
+
+  addElementResources(data) {
+    if (!data || !data.resources) return;
+
+    const resObj = data.resources;
+    let addedCount = 0;
+    let selectedAddedCount = 0;
+    const videosToPreprocess = [];
+
+    // 辅助函数：去重添加到指定列表
+    const addUniqueToList = (list, resource) => {
+      const matchKey = resource.url || resource.content;
+      if (!matchKey) return false;
+      if (!list.find(r => (r.url || r.content) === matchKey)) {
+        list.push(resource);
+        return true;
+      }
+      return false;
+    };
+
+    if (Array.isArray(resObj)) {
+      for (const resource of resObj) {
+        const type = resource.type || 'image';
+        const typeKey = type + 's';
+        const list = this.state.resources[typeKey] || this.state.resources.texts;
+        const selectedList = this.state.selectedResources[typeKey] || this.state.selectedResources.texts;
+        if (list && addUniqueToList(list, resource)) {
+          addedCount++;
+        }
+        if (selectedList && addUniqueToList(selectedList, resource)) {
+          selectedAddedCount++;
+          // 视频资源添加到已选后触发预处理
+          if (type === 'video') {
+            videosToPreprocess.push(resource);
+          }
+        }
+      }
+    } else {
+      const typeMap = { images: 'image', videos: 'video', audios: 'audio', links: 'link', downloads: 'download', texts: 'text' };
+      for (const category in resObj) {
+        if (!resObj.hasOwnProperty(category)) continue;
+        const items = resObj[category];
+        if (!Array.isArray(items)) continue;
+        const type = typeMap[category] || 'image';
+        const list = this.state.resources[category] || this.state.resources.texts;
+        const selectedList = this.state.selectedResources[category] || this.state.selectedResources.texts;
+        for (const item of items) {
+          const resource = typeof item === 'string' ? { url: item, type } : { ...item, type };
+          if (addUniqueToList(list, resource)) {
+            addedCount++;
+          }
+          if (addUniqueToList(selectedList, resource)) {
+            selectedAddedCount++;
+            // 视频资源添加到已选后触发预处理
+            if (type === 'video') {
+              videosToPreprocess.push(resource);
+            }
+          }
+        }
+      }
+    }
+
+    this.renderResources();
+    this.updateResourceCounts();
+
+    // 异步触发视频预处理（不阻塞 UI）
+    videosToPreprocess.forEach(resource => {
+      this.preprocessVideoIfNeeded(resource);
+    });
+
+    // 基于添加到"已选"的数量给出反馈（即使资源已在"资源"面板中，新加入"已选"也应提示）
+    if (selectedAddedCount > 0) {
+      this.setStatus(`元素提取 — ${selectedAddedCount} 个资源已加入已选`);
+      this.showToast(`已提取 ${selectedAddedCount} 个资源并加入已选`);
+      // 自动切换到"已选"标签，让用户立即看到提取结果
+      this.switchResourceTab('selected');
+    } else if (addedCount > 0) {
+      this.setStatus(`元素提取 — 新增 ${addedCount} 个资源`);
+      this.showToast(`已提取 ${addedCount} 个资源`);
+    }
+  },
+
+  // 网络拦截的媒体资源批量合并到当前资源列表
+  addMediaBatch(mediaArray) {
+    if (!Array.isArray(mediaArray) || mediaArray.length === 0) return;
+
+    let addedCount = 0;
+    const videosToPreprocess = [];
+    for (const media of mediaArray) {
+      if (!media || !media.url) continue;
+      const type = media.type || 'image';
+      const typeKey = type + 's'; // image -> images, video -> videos, audio -> audios
+      const list = this.state.resources[typeKey];
+      if (!list) continue;
+
+      // 去重（使用 url 作为匹配键）
+      const matchKey = media.url;
+      if (list.find(r => r.url === matchKey)) continue;
+
+      const resource = {
+        url: media.url,
+        type,
+        name: media.name || 'resource',
+        format: media.format || type.toUpperCase()
+      };
+      if (media.streamType) resource.streamType = media.streamType;
+      list.push(resource);
+      addedCount++;
+
+      // 视频资源触发预处理
+      if (type === 'video') {
+        videosToPreprocess.push(resource);
+      }
+    }
+
+    if (addedCount > 0) {
+      this.renderResources();
+      this.updateResourceCounts();
+      this.setStatus(`网络拦截新增 ${addedCount} 个媒体资源`);
+
+      // 异步触发视频预处理
+      videosToPreprocess.forEach(resource => {
+        this.preprocessVideoIfNeeded(resource);
+      });
+    }
+  },
+
+  loadSettings() {
+    try {
+      const saved = localStorage.getItem('webscout-settings');
+      if (saved) {
+        const settings = JSON.parse(saved);
+        this.state.theme = settings.theme || 'dark';
+        this.state.lang = settings.lang || 'zh';
+        this.state.showResourceLayer = settings.showResourceLayer === true;
+      }
+    } catch (e) {
+      console.error('Load settings failed:', e);
+    }
+  },
+
+  saveSettings() {
+    try {
+      localStorage.setItem('webscout-settings', JSON.stringify({
+        theme: this.state.theme,
+        lang: this.state.lang,
+        showResourceLayer: this.state.showResourceLayer
+      }));
+    } catch (e) {
+      console.error('Save settings failed:', e);
+    }
+  },
+
+  // ===== 模块切换 =====
+  switchModule(module) {
+    this.state.currentModule = module;
+
+    // 更新导航栏激活状态
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.classList.toggle('active', item.dataset.module === module);
+    });
+
+    // 切换模块视图
+    document.querySelectorAll('.module-view').forEach(view => {
+      view.classList.remove('active');
+    });
+    const targetView = document.getElementById(module + 'View');
+    if (targetView) targetView.classList.add('active');
+
+    // 控制 BrowserView 显示/隐藏
+    if (window.electronAPI?.setBrowserviewVisible) {
+      window.electronAPI.setBrowserviewVisible(module === 'scraper');
+    }
+
+    // 加载模块数据
+    if (module === 'dashboard' && typeof loadDashboardStats === 'function') {
+      loadDashboardStats();
+    } else if (module === 'workflow' && typeof Workflow?.loadList === 'function') {
+      Workflow.loadList();
+    } else if (module === 'aiworkflow' && typeof AIWorkflow?.loadList === 'function') {
+      AIWorkflow.loadList();
+    }
+  },
+
+  toggleNav() {
+    const nav = document.getElementById('leftNav');
+    nav.classList.toggle('expanded');
+    const isExpanded = nav.classList.contains('expanded');
+
+    // 同步到主进程
+    if (window.electronAPI?.setLeftNavWidth) {
+      window.electronAPI.setLeftNavWidth(isExpanded ? 200 : 56);
+    }
+
+    // 延迟更新 BrowserView 布局
+    setTimeout(() => {
+      if (this.state.currentModule === 'scraper' && window.electronAPI?.updateBrowserViewBounds) {
+        window.electronAPI.updateBrowserViewBounds();
+      }
+    }, 300);
+  },
+
+  // ===== 主题切换 =====
+  toggleTheme() {
+    this.state.theme = this.state.theme === 'dark' ? 'light' : 'dark';
+    this.updateThemeUI();
+    this.saveSettings();
+  },
+
+  toggleThemeFromSettings() {
+    const checkbox = document.getElementById('lightThemeToggle');
+    this.state.theme = checkbox.checked ? 'light' : 'dark';
+    this.updateThemeUI();
+    this.saveSettings();
+  },
+
+  updateThemeUI() {
+    const html = document.documentElement;
+    if (this.state.theme === 'light') {
+      html.classList.add('light-theme');
+    } else {
+      html.classList.remove('light-theme');
+    }
+
+    // 同步设置面板
+    const checkbox = document.getElementById('lightThemeToggle');
+    if (checkbox) checkbox.checked = this.state.theme === 'light';
+
+    // 更新主题按钮图标
+    const themeBtn = document.getElementById('themeToggle');
+    if (themeBtn) themeBtn.textContent = this.state.theme === 'dark' ? '☀' : '🌙';
+  },
+
+  // ===== 语言切换 =====
+  toggleLang() {
+    this.state.lang = this.state.lang === 'zh' ? 'en' : 'zh';
+    this.saveSettings();
+    this.showToast(this.state.lang === 'zh' ? '已切换为中文' : 'Switched to English');
+  },
+
+  // ===== 设置面板 =====
+  toggleSettings() {
+    const overlay = document.getElementById('settingsOverlay');
+    const willShow = !overlay.classList.contains('show');
+    overlay.classList.toggle('show');
+
+    // 弹出时隐藏 BrowserView（OS 级原生视图会覆盖 HTML 内容），关闭时恢复
+    if (window.electronAPI?.setBrowserviewVisible) {
+      window.electronAPI.setBrowserviewVisible(!willShow && this.state.currentModule === 'scraper');
+    }
+
+    // 同步设置面板状态
+    const resourceToggle = document.getElementById('showResourceLayerToggle');
+    if (resourceToggle) resourceToggle.checked = this.state.showResourceLayer;
+
+    // Task 18.6: 打开设置面板时拉取 MCP 状态
+    if (willShow) {
+      this.initMcpSettings();
+    }
+  },
+
+  // ===== Task 18.6: MCP 设置面板初始化 =====
+  async initMcpSettings() {
+    if (!window.electronAPI?.mcpAPI) return;
+    try {
+      const result = await window.electronAPI.mcpAPI.getStatus();
+      if (result && result.success) {
+        this.updateMcpStatusUI(result.data);
+      }
+    } catch (e) {
+      console.error('initMcpSettings failed:', e);
+    }
+  },
+
+  // 根据 mcp-status 数据更新 UI
+  updateMcpStatusUI(data) {
+    data = data || { running: false, readonly: true, toolCount: 0 };
+    const dot = document.getElementById('mcpStatusDot');
+    const text = document.getElementById('mcpStatusText');
+    const modeText = document.getElementById('mcpModeText');
+    const toolCountText = document.getElementById('mcpToolCountText');
+    const modeDesc = document.getElementById('mcpModeDesc');
+    const serviceToggle = document.getElementById('mcpServiceToggle');
+    const readonlyToggle = document.getElementById('mcpReadonlyToggle');
+
+    if (dot) {
+      dot.className = 'mcp-status-dot ' + (data.running ? 'running' : 'stopped');
+    }
+    if (text) {
+      text.textContent = data.running ? '运行中' : '已停止';
+    }
+    if (modeText) {
+      modeText.textContent = '· ' + (data.readonly ? '只读模式' : '读写模式');
+    }
+    if (toolCountText) {
+      toolCountText.textContent = '· ' + (data.toolCount || 0) + ' 个工具';
+    }
+    if (modeDesc) {
+      const startedNote = data.running && data.startedAt
+        ? ' · 启动于 ' + new Date(data.startedAt).toLocaleTimeString('zh-CN')
+        : '';
+      modeDesc.textContent = 'stdio 模式' + startedNote + ' · 启动后可在 Claude Desktop 配置接入';
+    }
+    if (serviceToggle) {
+      serviceToggle.checked = !!data.running;
+    }
+    if (readonlyToggle) {
+      // readonly=true 表示写操作关闭，所以 toggle 显示 !readonly
+      readonlyToggle.checked = !data.readonly;
+      // 未运行时禁用读写开关
+      readonlyToggle.disabled = !data.running;
+    }
+  },
+
+  // Task 18.4: MCP 服务开关
+  async toggleMcpService() {
+    if (!window.electronAPI?.mcpAPI) return;
+    const checkbox = document.getElementById('mcpServiceToggle');
+    const enabled = checkbox.checked;
+    // 读取当前 readonly 开关状态
+    const readonlyToggle = document.getElementById('mcpReadonlyToggle');
+    const readonly = readonlyToggle ? !readonlyToggle.checked : true;
+    try {
+      const result = await window.electronAPI.mcpAPI.toggle(enabled, readonly);
+      if (result && result.success) {
+        this.updateMcpStatusUI(result.data);
+        if (enabled) {
+          this.showToast('MCP 服务已启动' + (readonly ? '（只读）' : '（读写）'));
+        } else {
+          this.showToast('MCP 服务已停止');
+        }
+      } else {
+        // 失败时回滚开关状态
+        checkbox.checked = !enabled;
+        this.showToast('MCP 服务切换失败: ' + (result && result.error ? result.error : '未知错误'));
+      }
+    } catch (e) {
+      checkbox.checked = !enabled;
+      this.showToast('MCP 服务切换失败: ' + e.message);
+    }
+  },
+
+  // Task 18.4: MCP 读写模式开关
+  async toggleMcpReadonly() {
+    if (!window.electronAPI?.mcpAPI) return;
+    const checkbox = document.getElementById('mcpReadonlyToggle');
+    const allowWrite = checkbox.checked; // toggle 开 = 允许写 = readonly=false
+    const readonly = !allowWrite;
+    try {
+      const result = await window.electronAPI.mcpAPI.setReadonly(readonly);
+      if (result && result.success) {
+        // 切换后重新拉取状态
+        const statusResult = await window.electronAPI.mcpAPI.getStatus();
+        if (statusResult && statusResult.success) {
+          this.updateMcpStatusUI(statusResult.data);
+        }
+        this.showToast(allowWrite ? '已允许 MCP 写操作（重启服务生效）' : '已切换为只读模式（重启服务生效）');
+      } else {
+        checkbox.checked = !allowWrite;
+        this.showToast('切换读写模式失败: ' + (result && result.error ? result.error : '未知错误'));
+      }
+    } catch (e) {
+      checkbox.checked = !allowWrite;
+      this.showToast('切换读写模式失败: ' + e.message);
+    }
+  },
+
+  // Task 18.4: 折叠/展开接入示例
+  toggleMcpExample() {
+    const el = document.getElementById('mcpExampleCollapsible');
+    if (el) el.classList.toggle('expanded');
+    // 展开时填入实际路径
+    if (el && el.classList.contains('expanded')) {
+      this.fillMcpExamplePath();
+    }
+  },
+
+  // 填入实际的 mcp-stdio.js 路径
+  async fillMcpExamplePath() {
+    const codeEl = document.getElementById('mcpExampleCode');
+    if (!codeEl) return;
+    try {
+      const appPath = await window.electronAPI?.getAppPath?.();
+      const pathSep = (navigator.platform || '').indexOf('Win') >= 0 ? '\\' : '/';
+      const mcpPath = (appPath || '<app-path>') + pathSep + 'src' + pathSep + 'main' + pathSep + 'mcp-stdio.js';
+      codeEl.textContent = '{\n  "mcpServers": {\n    "web-scout": {\n      "command": "node",\n      "args": ["' + mcpPath + '"]\n    }\n  }\n}';
+    } catch (e) {
+      // 失败时保留占位符
+    }
+  },
+
+  // Task 18.4: 复制接入示例 JSON
+  async copyMcpExample() {
+    const codeEl = document.getElementById('mcpExampleCode');
+    if (!codeEl) return;
+    const text = codeEl.textContent || '';
+    try {
+      await navigator.clipboard.writeText(text);
+      this.showToast('已复制到剪贴板');
+    } catch (e) {
+      // 回退方案
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); this.showToast('已复制到剪贴板'); }
+      catch (e2) { this.showToast('复制失败'); }
+      document.body.removeChild(ta);
+    }
+  },
+
+  // Task 18.4: 折叠/展开调用日志
+  toggleMcpLogs() {
+    const el = document.getElementById('mcpLogsCollapsible');
+    if (el) el.classList.toggle('expanded');
+    // 展开时自动刷新
+    if (el && el.classList.contains('expanded')) {
+      this.refreshMcpLogs();
+    }
+  },
+
+  // Task 18.4: 刷新调用日志
+  async refreshMcpLogs() {
+    if (!window.electronAPI?.mcpAPI) return;
+    const listEl = document.getElementById('mcpLogsList');
+    const countEl = document.getElementById('mcpLogsCount');
+    if (!listEl) return;
+    try {
+      const result = await window.electronAPI.mcpAPI.getLogs();
+      if (result && result.success) {
+        const logs = Array.isArray(result.data) ? result.data : [];
+        if (countEl) countEl.textContent = '(' + logs.length + ')';
+        if (logs.length === 0) {
+          listEl.innerHTML = '<div class="mcp-logs-empty">暂无调用日志</div>';
+          return;
+        }
+        // 倒序显示（最新在上）
+        const self = this;
+        const html = logs.slice().reverse().map(log => {
+          const time = log.timestamp ? new Date(log.timestamp).toLocaleTimeString('zh-CN') : '';
+          const statusCls = log.success ? 'ok' : 'fail';
+          const statusText = log.success ? 'OK' : '失败';
+          const argsStr = log.args ? JSON.stringify(log.args).slice(0, 120) : '';
+          const errStr = log.error ? ' · ' + log.error : '';
+          return '<div class="mcp-log-item">' +
+            '<span class="log-tool">' + self.escapeHtml(log.tool || '') + '</span>' +
+            '<span class="log-time">' + time + '</span>' +
+            '<span class="log-status ' + statusCls + '">' + statusText + '</span>' +
+            '<span class="log-args">' + self.escapeHtml(argsStr) + self.escapeHtml(errStr) + '</span>' +
+            '</div>';
+        }).join('');
+        listEl.innerHTML = html;
+      }
+    } catch (e) {
+      console.error('refreshMcpLogs failed:', e);
+    }
+  },
+
+  toggleShowResourceLayer() {
+    const checkbox = document.getElementById('showResourceLayerToggle');
+    this.state.showResourceLayer = checkbox.checked;
+    this.saveSettings();
+    this.updateResourceLayerVisibility();
+  },
+
+  updateResourceLayerVisibility() {
+    const layerPanels = document.getElementById('layerPanels');
+    if (!layerPanels) return;
+
+    if (this.state.showResourceLayer) {
+      // 打开资源层：显示所有内容
+      layerPanels.style.display = 'block';
+
+      // 显示"资源"tab按钮
+      const resourceTab = document.querySelector('.resource-tab[data-tab="resources"]');
+      if (resourceTab) resourceTab.style.display = '';
+
+      // 显示 paneResources
+      const paneResources = document.getElementById('paneResources');
+      if (paneResources) paneResources.style.display = '';
+    } else {
+      // 关闭资源层：隐藏"资源"tab按钮和paneResources，但保留"已选"和"文本"
+      layerPanels.style.display = 'block';
+
+      // 隐藏"资源"tab按钮
+      const resourceTab = document.querySelector('.resource-tab[data-tab="resources"]');
+      if (resourceTab) resourceTab.style.display = 'none';
+
+      // 隐藏 paneResources
+      const paneResources = document.getElementById('paneResources');
+      if (paneResources) {
+        paneResources.style.display = 'none';
+        paneResources.classList.remove('active');
+      }
+
+      // 如果当前激活的是"资源"标签，自动切换到"已选"标签
+      if (resourceTab && resourceTab.classList.contains('active')) {
+        this.switchResourceTab('selected');
+      }
+    }
+  },
+
+  // ===== 窗口控制 =====
+  minimizeWindow() {
+    if (window.electronAPI?.minimizeWindow) window.electronAPI.minimizeWindow();
+  },
+
+  maximizeWindow() {
+    if (window.electronAPI?.maximizeWindow) window.electronAPI.maximizeWindow();
+  },
+
+  closeWindow() {
+    if (window.electronAPI?.closeWindow) window.electronAPI.closeWindow();
+  },
+
+  // ===== 标签页管理 =====
+  async addNewTab(url = '') {
+    const targetUrl = url || 'https://www.baidu.com';
+
+    // 有 url 参数时（通过超链接打开），标记需要自动切换到新标签
+    if (url) this.state._pendingSwitch = true;
+
+    // 通过主进程创建 BrowserView 标签
+    if (window.electronAPI?.createTab) {
+      await window.electronAPI.createTab(targetUrl);
+      // 标签会通过 tab-created 事件自动添加
+    }
+  },
+
+  closeTab(tabId) {
+    const index = this.state.tabs.findIndex(t => t.id === tabId);
+    if (index === -1) return;
+
+    this.state.tabs.splice(index, 1);
+
+    // 通知主进程关闭 BrowserView
+    if (window.electronAPI?.closeTab) {
+      window.electronAPI.closeTab(tabId);
+    }
+
+    if (this.state.tabs.length === 0) {
+      this.state.activeTabId = null;
+      this.renderTabs();
+      this.showEmptyState();
+    } else if (this.state.activeTabId === tabId) {
+      const newActive = this.state.tabs[Math.min(index, this.state.tabs.length - 1)];
+      this.switchToTab(newActive.id);
+    } else {
+      this.renderTabs();
+    }
+  },
+
+  switchToTab(tabId) {
+    this.state.activeTabId = tabId;
+    this.renderTabs();
+
+    // 通知主进程切换 BrowserView
+    if (window.electronAPI?.switchTab) {
+      window.electronAPI.switchTab(tabId);
+    }
+  },
+
+  renderTabs() {
+    const tabBar = document.getElementById('tabBar');
+    if (!tabBar) return;
+
+    // 保留"新建标签页"按钮
+    const addBtn = tabBar.querySelector('.tab-add');
+    tabBar.innerHTML = '';
+
+    this.state.tabs.forEach(tab => {
+      const tabEl = document.createElement('button');
+      tabEl.className = 'tab' + (tab.id === this.state.activeTabId ? ' active' : '');
+      tabEl.onclick = () => this.switchToTab(tab.id);
+      tabEl.innerHTML = `
+        <span class="tab-title">${this.escapeHtml(tab.title)}</span>
+        <button class="tab-close" aria-label="关闭标签页">×</button>
+      `;
+      // 用 addEventListener 绑定关闭事件，保持 tabId 为数字类型
+      const closeBtn = tabEl.querySelector('.tab-close');
+      if (closeBtn) {
+        closeBtn.onclick = (e) => {
+          e.stopPropagation();
+          this.closeTab(tab.id);
+        };
+      }
+      tabBar.appendChild(tabEl);
+    });
+
+    if (addBtn) {
+      tabBar.appendChild(addBtn);
+    } else {
+      const newAddBtn = document.createElement('button');
+      newAddBtn.className = 'tab-add';
+      newAddBtn.onclick = () => this.addNewTab();
+      newAddBtn.setAttribute('aria-label', '新建标签页');
+      newAddBtn.textContent = '+';
+      tabBar.appendChild(newAddBtn);
+    }
+  },
+
+  showEmptyState() {
+    const emptyState = document.getElementById('emptyState');
+    if (emptyState) emptyState.style.display = 'flex';
+  },
+
+  hideEmptyState() {
+    const emptyState = document.getElementById('emptyState');
+    if (emptyState) emptyState.style.display = 'none';
+  },
+
+  // ===== 导航控制 =====
+  async loadUrl(url) {
+    const urlInput = document.getElementById('urlInput');
+    const targetUrl = url || urlInput?.value?.trim();
+
+    if (!targetUrl) {
+      this.showToast('请输入网址');
+      return;
+    }
+
+    let finalUrl = targetUrl;
+    if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+      finalUrl = 'https://' + finalUrl;
+    }
+
+    if (urlInput) urlInput.value = finalUrl;
+    this.hideEmptyState();
+
+    // 如果没有标签页，创建一个（addNewTab 已经会加载 URL，无需再调用 loadUrl）
+    if (this.state.tabs.length === 0) {
+      await this.addNewTab(finalUrl);
+    } else {
+      if (!this.state.activeTabId) {
+        this.switchToTab(this.state.tabs[0].id);
+      }
+      // 通知主进程在当前活动标签加载 URL
+      if (window.electronAPI?.loadUrl) {
+        window.electronAPI.loadUrl(this.state.activeTabId, finalUrl);
+      }
+    }
+
+    this.showLoading(true);
+    this.setStatus('加载中…');
+
+    // 添加到历史记录
+    this.addToHistory(finalUrl);
+  },
+
+  goBack() {
+    if (window.electronAPI?.goBack && this.state.activeTabId) {
+      window.electronAPI.goBack(this.state.activeTabId);
+    }
+  },
+
+  goForward() {
+    if (window.electronAPI?.goForward && this.state.activeTabId) {
+      window.electronAPI.goForward(this.state.activeTabId);
+    }
+  },
+
+  // ===== 提取模式 =====
+  toggleInspect() {
+    this.state.inspectMode = !this.state.inspectMode;
+    const btn = document.getElementById('inspectToggle');
+    if (btn) btn.classList.toggle('active', this.state.inspectMode);
+
+    if (window.electronAPI?.toggleInspect) {
+      window.electronAPI.toggleInspect(this.state.activeTabId, this.state.inspectMode);
+    }
+
+    // 开启提取模式时自动展开资源侧栏
+    if (this.state.inspectMode && !this.state.sidebarVisible) {
+      this.toggleSidebar();
+    }
+
+    this.showToast(this.state.inspectMode ? '已开启提取模式' : '已关闭提取模式');
+  },
+
+  // ===== 侧边栏 =====
+  toggleSidebar() {
+    this.state.sidebarVisible = !this.state.sidebarVisible;
+    const panel = document.getElementById('rightPanel');
+    if (panel) panel.classList.toggle('collapsed', !this.state.sidebarVisible);
+
+    // 控制浮动展开按钮显示/隐藏
+    const expandBtn = document.getElementById('sidebarExpandBtn');
+    if (expandBtn) expandBtn.classList.toggle('show', !this.state.sidebarVisible);
+
+    // 更新折叠按钮图标和 title
+    const toggleBtn = document.getElementById('sidebarToggle');
+    if (toggleBtn) {
+      if (this.state.sidebarVisible) {
+        toggleBtn.textContent = '◀';
+        toggleBtn.title = '折叠侧栏';
+      } else {
+        toggleBtn.textContent = '▶';
+        toggleBtn.title = '展开侧栏';
+      }
+    }
+
+    if (window.electronAPI?.setSidebarVisible) {
+      window.electronAPI.setSidebarVisible(this.state.sidebarVisible);
+    }
+
+    // 延迟更新 BrowserView 布局
+    setTimeout(() => {
+      if (this.state.currentModule === 'scraper' && window.electronAPI?.updateBrowserViewBounds) {
+        window.electronAPI.updateBrowserViewBounds();
+      }
+    }, 300);
+  },
+
+  // ===== 资源面板 =====
+  switchResourceTab(tabName) {
+    document.querySelectorAll('.resource-tab').forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.tab === tabName);
+    });
+
+    document.querySelectorAll('.tab-pane').forEach(pane => {
+      pane.classList.remove('active');
+    });
+
+    const targetPane = document.getElementById('pane' + tabName.charAt(0).toUpperCase() + tabName.slice(1));
+    if (targetPane) targetPane.classList.add('active');
+  },
+
+  switchSubTab(parentTab, subTabName) {
+    const parentPane = document.getElementById('pane' + parentTab.charAt(0).toUpperCase() + parentTab.slice(1));
+    if (!parentPane) return;
+
+    parentPane.querySelectorAll('.sub-tab').forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.subtab === subTabName);
+    });
+
+    parentPane.querySelectorAll('.sub-pane').forEach(pane => {
+      pane.classList.remove('active');
+    });
+
+    const targetSubPane = parentPane.querySelector(`[data-subpane="${subTabName}"]`);
+    if (targetSubPane) targetSubPane.classList.add('active');
+  },
+
+  // ===== 资源管理 =====
+  updateResourceCounts() {
+    const counts = {
+      images: this.state.resources.images.length,
+      videos: this.state.resources.videos.length,
+      audios: this.state.resources.audios.length,
+      links: this.state.resources.links.length,
+      downloads: this.state.resources.downloads.length,
+      texts: this.state.resources.texts.length
+    };
+
+    const selectedCounts = {
+      images: this.state.selectedResources.images.length,
+      videos: this.state.selectedResources.videos.length,
+      audios: this.state.selectedResources.audios.length,
+      links: this.state.selectedResources.links.length,
+      downloads: this.state.selectedResources.downloads.length,
+      texts: this.state.selectedResources.texts.length
+    };
+
+    // 更新标签计数
+    this.updateCount('tabCountResources', counts.images + counts.videos + counts.audios + counts.links + counts.downloads);
+    this.updateCount('tabCountSelected', selectedCounts.images + selectedCounts.videos + selectedCounts.audios + selectedCounts.links + selectedCounts.downloads + selectedCounts.texts);
+    this.updateCount('tabCountTexts', counts.texts);
+
+    // 更新子标签计数
+    this.updateCount('subImageCount', counts.images);
+    this.updateCount('subVideoCount', counts.videos);
+    this.updateCount('subAudioCount', counts.audios);
+    this.updateCount('subLinkCount', counts.links);
+    this.updateCount('subDownloadCount', counts.downloads);
+
+    this.updateCount('subSelectedImageCount', selectedCounts.images);
+    this.updateCount('subSelectedVideoCount', selectedCounts.videos);
+    this.updateCount('subSelectedAudioCount', selectedCounts.audios);
+    this.updateCount('subSelectedLinkCount', selectedCounts.links);
+    this.updateCount('subSelectedDownloadCount', selectedCounts.downloads);
+    this.updateCount('subSelectedTextCount', selectedCounts.texts);
+
+    // 更新已选计数
+    const totalSelected = selectedCounts.images + selectedCounts.videos + selectedCounts.audios + selectedCounts.links + selectedCounts.downloads + selectedCounts.texts;
+    this.updateCount('selectedCount', totalSelected);
+  },
+
+  updateCount(elementId, count) {
+    const el = document.getElementById(elementId);
+    if (el) el.textContent = count;
+  },
+
+  toggleResourceSelection(type, resource) {
+    const list = this.state.selectedResources[type];
+    // 使用 url 或 content 作为匹配条件（文本资源没有 url，使用 content）
+    const matchKey = resource.url || resource.content;
+    const index = list.findIndex(r => (r.url || r.content) === matchKey);
+
+    if (index === -1) {
+      list.push(resource);
+    } else {
+      list.splice(index, 1);
+    }
+
+    this.renderResources();
+    this.updateResourceCounts();
+  },
+
+  clearAllSelected() {
+    this.state.selectedResources = { images: [], videos: [], audios: [], links: [], downloads: [], texts: [] };
+    this.state.batchSelected.clear();
+    this.renderResources();
+    this.updateResourceCounts();
+    this.showToast('已清空所有已选资源');
+  },
+
+  // ===== 筛选器 =====
+  applySelectedFilter() {
+    const input = document.getElementById('selectedFilterInput');
+    if (input) {
+      this.state.selectedFilter = input.value.trim();
+      this.renderResources();
+    }
+  },
+
+  // ===== 批量处理 =====
+  toggleBatchMode() {
+    this.state.batchMode = !this.state.batchMode;
+    if (!this.state.batchMode) {
+      this.state.batchSelected.clear();
+    }
+    // 更新按钮显示
+    const batchBtn = document.getElementById('batchModeBtn');
+    if (batchBtn) {
+      batchBtn.classList.toggle('active', this.state.batchMode);
+      batchBtn.textContent = this.state.batchMode ? '☑ 退出批量' : '☑ 批量';
+    }
+    document.getElementById('batchSelectAllBtn').style.display = this.state.batchMode ? '' : 'none';
+    document.getElementById('batchDeleteBtn').style.display = this.state.batchMode ? '' : 'none';
+    document.getElementById('batchExportBtn').style.display = this.state.batchMode ? '' : 'none';
+    this.renderResources();
+  },
+
+  toggleBatchSelect(batchKey, event) {
+    if (event) event.stopPropagation();
+    if (this.state.batchSelected.has(batchKey)) {
+      this.state.batchSelected.delete(batchKey);
+    } else {
+      this.state.batchSelected.add(batchKey);
+    }
+    this.renderResources();
+  },
+
+  batchSelectAll() {
+    // 选中当前筛选结果中的所有资源
+    const types = ['images', 'videos', 'audios', 'links', 'texts'];
+    types.forEach(type => {
+      let list = this.state.selectedResources[type];
+      if (this.state.selectedFilter) {
+        const filter = this.state.selectedFilter.toLowerCase();
+        list = list.filter(r => {
+          const name = (r.name || r.text || '').toLowerCase();
+          const url = (r.url || '').toLowerCase();
+          return name.includes(filter) || url.includes(filter);
+        });
+      }
+      list.forEach((_, i) => {
+        const realIdx = this.state.selectedResources[type].indexOf(list[i] !== undefined ? list[i] : this.state.selectedResources[type][i]);
+        // 直接用原始索引
+      });
+      // 直接遍历原始数组，用真实索引
+      this.state.selectedResources[type].forEach((r, realIdx) => {
+        if (this.state.selectedFilter) {
+          const filter = this.state.selectedFilter.toLowerCase();
+          const name = (r.name || r.text || '').toLowerCase();
+          const url = (r.url || '').toLowerCase();
+          if (!name.includes(filter) && !url.includes(filter)) return;
+        }
+        this.state.batchSelected.add(type + ':' + realIdx);
+      });
+    });
+    this.renderResources();
+    this.showToast('已全选当前筛选结果');
+  },
+
+  batchDelete() {
+    if (this.state.batchSelected.size === 0) {
+      this.showToast('请先选择要删除的资源');
+      return;
+    }
+    if (!confirm('确定从已选资源中删除 ' + this.state.batchSelected.size + ' 项？')) return;
+    // 按 type 分组，从后往前删除以保持索引正确
+    const toDelete = {};
+    this.state.batchSelected.forEach(key => {
+      const [type, idx] = key.split(':');
+      if (!toDelete[type]) toDelete[type] = [];
+      toDelete[type].push(parseInt(idx));
+    });
+    Object.keys(toDelete).forEach(type => {
+      toDelete[type].sort((a, b) => b - a).forEach(idx => {
+        if (this.state.selectedResources[type] && this.state.selectedResources[type][idx]) {
+          this.state.selectedResources[type].splice(idx, 1);
+        }
+      });
+    });
+    this.state.batchSelected.clear();
+    this.renderResources();
+    this.updateResourceCounts();
+    this.showToast('已删除选中项');
+  },
+
+  async batchExport() {
+    if (this.state.batchSelected.size === 0) {
+      this.showToast('请先选择要导出的资源');
+      return;
+    }
+    // 收集批量选中的资源
+    const selected = [];
+    this.state.batchSelected.forEach(key => {
+      const [type, idx] = key.split(':');
+      const resource = this.state.selectedResources[type] && this.state.selectedResources[type][parseInt(idx)];
+      if (resource) selected.push(resource);
+    });
+    if (selected.length === 0) {
+      this.showToast('没有可导出的资源');
+      return;
+    }
+    // 选择导出目录
+    const destDir = await window.electronAPI.selectDirectory();
+    if (!destDir) return;
+    this.showDownloadDialog(selected.length);
+    this.setStatus('正在批量导出资源…');
+    let successCount = 0;
+    let failCount = 0;
+    const total = selected.length;
+    this.state.downloadCancelled = false;
+    if (window.electronAPI?.resetDownloadCancel) {
+      await window.electronAPI.resetDownloadCancel();
+    }
+    for (let i = 0; i < selected.length; i++) {
+      if (this.state.downloadCancelled) break;
+      const resource = selected[i];
+      const isBili = this.isBilibiliVideo(resource);
+      const fileId = isBili ? 'bili_' + i : (resource.type === 'video' ? 'video_' + i : (resource.type === 'text' ? 'text_' + i : 'img_' + i));
+      this.updateDownloadDialogProgress(i, total);
+      this.updateDownloadItemStatus(fileId, 'processing', resource.name || 'resource');
+      try {
+        const result = await this.exportSingleResource(resource, destDir, i, fileId, new Set());
+        if (result && result.success) {
+          successCount++;
+          this.updateDownloadItemStatus(fileId, 'done', result.title || resource.name || 'resource');
+        } else {
+          failCount++;
+          this.updateDownloadItemStatus(fileId, 'error', result?.error || '未知错误');
+        }
+      } catch (err) {
+        failCount++;
+        this.updateDownloadItemStatus(fileId, 'error', err.message || '异常');
+      }
+      this.updateDownloadDialogProgress(i + 1, total);
+    }
+    const wasCancelled = this.state.downloadCancelled;
+    this.finishDownloadDialog(successCount, failCount, wasCancelled);
+    this.showToast(wasCancelled ? '已取消' : '批量导出完成: ' + successCount + ' 成功');
+    this.saveWorkflowRecord(selected, destDir);
+  },
+
+  renderResources() {
+    // 渲染资源列表（type 使用复数形式，与 state.resources 的键名一致）
+    this.renderResourceList('imageList', this.state.resources.images, 'images');
+    this.renderResourceList('videoList', this.state.resources.videos, 'videos');
+    this.renderResourceList('audioList', this.state.resources.audios, 'audios');
+    this.renderLinkList('linkList', this.state.resources.links);
+    this.renderDownloadList('downloadList', this.state.resources.downloads);
+    this.renderTextList('textList', this.state.resources.texts);
+
+    // 渲染已选资源
+    this.renderResourceList('selectedImageList', this.state.selectedResources.images, 'images', true);
+    this.renderResourceList('selectedVideoList', this.state.selectedResources.videos, 'videos', true);
+    this.renderResourceList('selectedAudioList', this.state.selectedResources.audios, 'audios', true);
+    this.renderLinkList('selectedLinkList', this.state.selectedResources.links, true);
+    this.renderDownloadList('selectedDownloadList', this.state.selectedResources.downloads, true);
+    this.renderTextList('selectedTextList', this.state.selectedResources.texts, true);
+  },
+
+  renderResourceList(containerId, resources, type, isSelected = false) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    // 已选面板应用筛选器
+    let displayResources = resources;
+    if (isSelected && this.state.selectedFilter) {
+      const filter = this.state.selectedFilter.toLowerCase();
+      displayResources = resources.filter(r => {
+        const name = (r.name || r.text || '').toLowerCase();
+        const url = (r.url || '').toLowerCase();
+        return name.includes(filter) || url.includes(filter);
+      });
+    }
+
+    if (displayResources.length === 0) {
+      const msg = (isSelected && this.state.selectedFilter) ? '无匹配资源' : '暂无资源';
+      container.innerHTML = '<div style="color:var(--text2);font-size:12px;text-align:center;padding:20px">' + msg + '</div>';
+      return;
+    }
+
+    // 已选面板引用 selectedResources，原始面板引用 resources
+    const listPath = isSelected ? `selectedResources.${type}` : `resources.${type}`;
+    // 单数形式用于显示（images → image）
+    const displayType = type.replace(/s$/, '');
+
+    container.innerHTML = displayResources.map((resource, index) => {
+      // 找到资源在原数组中的真实索引（筛选后）
+      const realIndex = isSelected ? resources.indexOf(resource) : index;
+      const isSelectedItem = isSelected || this.isResourceSelected(type, resource);
+      // 批量模式相关
+      const batchKey = isSelected ? type + ':' + realIndex : '';
+      const isBatchSelected = isSelected && this.state.batchMode && this.state.batchSelected.has(batchKey);
+      const batchClass = isSelected && this.state.batchMode ? ' batch-mode' + (isBatchSelected ? ' batch-selected' : '') : '';
+      const batchCheckbox = isSelected && this.state.batchMode
+        ? '<input type="checkbox" class="batch-checkbox" ' + (isBatchSelected ? 'checked' : '') + ' onclick="App.toggleBatchSelect(\'' + batchKey + '\',event)">'
+        : '';
+      // 视频转码状态显示（不显示失败状态）
+      let statusBadge = '';
+      if (displayType === 'video' && resource.preprocessStatus) {
+        if (resource.preprocessStatus === 'processing') {
+          statusBadge = '<span style="color:#f39c12;font-size:10px">⏳ 转码中...</span>';
+        } else if (resource.preprocessStatus === 'done') {
+          statusBadge = '<span style="color:#27ae60;font-size:10px">✓ 已转码</span>';
+        }
+      }
+      // B 站视频标记
+      let biliBadge = '';
+      if (displayType === 'video' && this.isBilibiliVideo(resource)) {
+        biliBadge = '<span style="color:#00a1d6;font-size:10px">📺 B站</span>';
+      }
+      // 视频图标
+      const previewIcon = displayType === 'video' ? '🎬' : (displayType === 'audio' ? '🎵' : '📄');
+      const previewContent = displayType === 'image' && resource.url
+        ? `<img src="${this.escapeHtml(resource.url)}" alt="${this.escapeHtml(resource.name || '')}" loading="lazy">`
+        : `<span class="icon-large">${previewIcon}</span>`;
+      // 批量模式下点击卡片切换选择，非批量模式下正常切换
+      const onclickAction = isSelected && this.state.batchMode
+        ? `App.toggleBatchSelect('${batchKey}')`
+        : `App.toggleResourceSelection('${type}', App.state.${listPath}[${realIndex}])`;
+      return `
+        <div class="resource-card ${isSelectedItem ? 'selected' : ''}${batchClass}" onclick="${onclickAction}">
+          ${batchCheckbox}
+          <div class="card-preview">
+            ${previewContent}
+          </div>
+          <div class="card-info">
+            <div class="card-name">${this.escapeHtml(resource.name || '未命名')}</div>
+            <div class="card-meta">
+              <span>${resource.format || displayType}</span>
+              ${biliBadge}${statusBadge}
+            </div>
+          </div>
+          <div class="card-check"></div>
+        </div>
+      `;
+    }).join('');
+  },
+
+  renderLinkList(containerId, links, isSelected = false) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    // 已选面板应用筛选器
+    let displayLinks = links;
+    if (isSelected && this.state.selectedFilter) {
+      const filter = this.state.selectedFilter.toLowerCase();
+      displayLinks = links.filter(l => {
+        const name = (l.text || l.name || '').toLowerCase();
+        const url = (l.url || '').toLowerCase();
+        return name.includes(filter) || url.includes(filter);
+      });
+    }
+
+    if (displayLinks.length === 0) {
+      const msg = (isSelected && this.state.selectedFilter) ? '无匹配链接' : '暂无链接';
+      container.innerHTML = '<div style="color:var(--text2);font-size:12px;text-align:center;padding:20px">' + msg + '</div>';
+      return;
+    }
+
+    const listPath = isSelected ? 'selectedResources.links' : 'resources.links';
+
+    container.innerHTML = displayLinks.map((link, index) => {
+      const realIndex = isSelected ? links.indexOf(link) : index;
+      const isSelectedItem = isSelected || this.isResourceSelected('links', link);
+      const batchKey = isSelected ? 'links:' + realIndex : '';
+      const isBatchSelected = isSelected && this.state.batchMode && this.state.batchSelected.has(batchKey);
+      const batchClass = isSelected && this.state.batchMode ? ' batch-mode' + (isBatchSelected ? ' batch-selected' : '') : '';
+      const batchCheckbox = isSelected && this.state.batchMode
+        ? '<input type="checkbox" class="batch-checkbox" ' + (isBatchSelected ? 'checked' : '') + ' onclick="App.toggleBatchSelect(\'' + batchKey + '\',event)">'
+        : '';
+      const onclickAction = isSelected && this.state.batchMode
+        ? `App.toggleBatchSelect('${batchKey}')`
+        : `App.toggleResourceSelection('links', App.state.${listPath}[${realIndex}])`;
+      return `
+        <div class="link-row ${isSelectedItem ? 'selected' : ''}${batchClass}" onclick="${onclickAction}">
+          ${batchCheckbox}
+          <span class="link-icon"></span>
+          <span class="link-name">${this.escapeHtml(link.text || link.name || link.url)}</span>
+          <div class="link-check"></div>
+        </div>
+      `;
+    }).join('');
+  },
+
+  // 下载链接资源渲染（区别于普通链接：包含高速下载按钮和文件大小信息）
+  renderDownloadList(containerId, downloads, isSelected = false) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    // 已选面板应用筛选器
+    let displayDownloads = downloads;
+    if (isSelected && this.state.selectedFilter) {
+      const filter = this.state.selectedFilter.toLowerCase();
+      displayDownloads = downloads.filter(d => {
+        const name = (d.name || d.text || '').toLowerCase();
+        const url = (d.url || '').toLowerCase();
+        return name.includes(filter) || url.includes(filter);
+      });
+    }
+
+    if (displayDownloads.length === 0) {
+      const msg = (isSelected && this.state.selectedFilter) ? '无匹配下载链接' : '暂无下载链接';
+      container.innerHTML = '<div style="color:var(--text2);font-size:12px;text-align:center;padding:20px">' + msg + '</div>';
+      return;
+    }
+
+    const listPath = isSelected ? 'selectedResources.downloads' : 'resources.downloads';
+
+    container.innerHTML = displayDownloads.map((dl, index) => {
+      const realIndex = isSelected ? downloads.indexOf(dl) : index;
+      const isSelectedItem = isSelected || this.isResourceSelected('downloads', dl);
+      const batchKey = isSelected ? 'downloads:' + realIndex : '';
+      const isBatchSelected = isSelected && this.state.batchMode && this.state.batchSelected.has(batchKey);
+      const batchClass = isSelected && this.state.batchMode ? ' batch-mode' + (isBatchSelected ? ' batch-selected' : '') : '';
+      const batchCheckbox = isSelected && this.state.batchMode
+        ? '<input type="checkbox" class="batch-checkbox" ' + (isBatchSelected ? 'checked' : '') + ' onclick="App.toggleBatchSelect(\'' + batchKey + '\',event)">'
+        : '';
+      const onclickAction = isSelected && this.state.batchMode
+        ? `App.toggleBatchSelect('${batchKey}')`
+        : `App.toggleResourceSelection('downloads', App.state.${listPath}[${realIndex}])`;
+      // 文件大小格式化
+      const sizeStr = dl.size ? this.formatFileSize(dl.size) : '';
+      // 来源标记（github/gitlab/网盘等）
+      const sourceBadge = dl.source ? `<span style="color:var(--primary);font-size:10px;background:var(--surface2);padding:1px 5px;border-radius:3px;">${this.escapeHtml(dl.source)}</span>` : '';
+      // 高速下载按钮（仅未选中时显示）
+      const fastDlBtn = !isSelected
+        ? `<button class="batch-btn" style="padding:2px 8px;font-size:11px;" onclick="event.stopPropagation();App.fastDownload('${this.escapeHtml(dl.url)}','${this.escapeHtml(dl.name || 'download')}')" title="高速下载（多线程并行）">⚡ 下载</button>`
+        : '';
+      return `
+        <div class="link-row ${isSelectedItem ? 'selected' : ''}${batchClass}" onclick="${onclickAction}" style="display:flex;align-items:center;gap:8px;">
+          ${batchCheckbox}
+          <span style="font-size:14px;">⬇</span>
+          <div style="flex:1;min-width:0;">
+            <div class="link-name">${this.escapeHtml(dl.name || dl.text || dl.url)}</div>
+            <div style="font-size:10px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${this.escapeHtml(dl.url || '')}</div>
+          </div>
+          ${sizeStr ? `<span style="font-size:10px;color:var(--text2);">${sizeStr}</span>` : ''}
+          ${sourceBadge}
+          ${fastDlBtn}
+          <div class="link-check"></div>
+        </div>
+      `;
+    }).join('');
+  },
+
+  // 格式化文件大小
+  formatFileSize(bytes) {
+    if (!bytes || bytes < 0) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+  },
+
+  renderTextList(containerId, texts, isSelected = false) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    // 已选面板应用筛选器
+    let displayTexts = texts;
+    if (isSelected && this.state.selectedFilter) {
+      const filter = this.state.selectedFilter.toLowerCase();
+      displayTexts = texts.filter(t => {
+        const content = (t.content || '').toLowerCase();
+        const name = (t.name || '').toLowerCase();
+        return content.includes(filter) || name.includes(filter);
+      });
+    }
+
+    if (displayTexts.length === 0) {
+      const msg = (isSelected && this.state.selectedFilter) ? '无匹配文本' : '暂无文本';
+      container.innerHTML = '<div style="color:var(--text2);font-size:12px;text-align:center;padding:20px">' + msg + '</div>';
+      return;
+    }
+
+    const listPath = isSelected ? 'selectedResources.texts' : 'resources.texts';
+
+    container.innerHTML = displayTexts.map((text, index) => {
+      const realIndex = isSelected ? texts.indexOf(text) : index;
+      const isSelectedItem = isSelected || this.isResourceSelected('texts', text);
+      const batchKey = isSelected ? 'texts:' + realIndex : '';
+      const isBatchSelected = isSelected && this.state.batchMode && this.state.batchSelected.has(batchKey);
+      const batchClass = isSelected && this.state.batchMode ? ' batch-mode' + (isBatchSelected ? ' batch-selected' : '') : '';
+      const batchCheckbox = isSelected && this.state.batchMode
+        ? '<input type="checkbox" class="batch-checkbox" ' + (isBatchSelected ? 'checked' : '') + ' onclick="App.toggleBatchSelect(\'' + batchKey + '\',event)">'
+        : '';
+      const onclickAction = isSelected && this.state.batchMode
+        ? `App.toggleBatchSelect('${batchKey}')`
+        : `App.toggleResourceSelection('texts', App.state.${listPath}[${realIndex}])`;
+      return `
+        <div class="text-block ${isSelectedItem ? 'selected' : ''}${batchClass}" onclick="${onclickAction}">
+          ${batchCheckbox}
+          <div class="text-content">${this.escapeHtml(text.content || '')}</div>
+        </div>
+      `;
+    }).join('');
+  },
+
+  isResourceSelected(type, resource) {
+    const matchKey = resource.url || resource.content;
+    return this.state.selectedResources[type].some(r => (r.url || r.content) === matchKey);
+  },
+
+  // ===== 导出功能 =====
+  exportToWSW() {
+    const selected = this.getAllSelectedResources();
+    if (selected.length === 0) {
+      this.showToast('请先选择要导出的资源');
+      return;
+    }
+
+    if (window.electronAPI?.exportToWSW) {
+      window.electronAPI.exportToWSW(selected, this.state.activeTabId);
+    }
+  },
+
+  exportToExcel() {
+    const selected = this.getAllSelectedResources();
+    if (selected.length === 0) {
+      this.showToast('请先选择要导出的资源');
+      return;
+    }
+
+    if (window.electronAPI?.exportToExcel) {
+      window.electronAPI.exportToExcel(selected, this.state.activeTabId);
+    }
+  },
+
+  getAllSelectedResources() {
+    const all = [];
+    Object.values(this.state.selectedResources).forEach(list => {
+      all.push(...list);
+    });
+    return all;
+  },
+
+  // ===== 视频预处理与智能导出 =====
+
+  // 清理文件名中的非法字符
+  safeFileName(name) {
+    if (!name) return 'resource_' + Date.now();
+    return name.replace(/[<>:"/\\|?*\s]/g, '_').replace(/_+/g, '_').substring(0, 80);
+  },
+
+  // 渲染进程的路径拼接（替代 Node.js path.join）
+  pathJoin(dir, name) {
+    const sep = dir.includes('\\') ? '\\' : '/';
+    const cleanDir = dir.replace(/[\\/]+$/, '');
+    const cleanName = name.replace(/^[\\/]+/, '');
+    return cleanDir + sep + cleanName;
+  },
+
+  // 获取当前页面 URL（用于判断 B 站视频）
+  getCurrentUrl() {
+    const urlInput = document.getElementById('urlInput');
+    return urlInput ? urlInput.value : '';
+  },
+
+  // 获取当前页面标题（用于视频命名）
+  getCurrentPageTitle() {
+    const activeTab = this.state.tabs.find(t => t.id === this.state.activeTabId);
+    if (activeTab && activeTab.title) {
+      return activeTab.title;
+    }
+    return '';
+  },
+
+  // 判断是否为 B 站视频页面
+  isBilibiliPage() {
+    const url = this.getCurrentUrl();
+    return url.includes('bilibili.com/video/') || url.match(/^BV\w+/);
+  },
+
+  // 判断视频资源是否需要预处理（blob:、m3u8 需要提前处理）
+  needsPreprocess(resource) {
+    if (!resource || !resource.url) return false;
+    const url = resource.url;
+    // blob: URL 需要通过 BrowserView fetch 获取数据
+    if (url.startsWith('blob:')) return true;
+    // m3u8 流媒体需要下载合并 ts 片段
+    if (url.includes('.m3u8') || url.includes('.ts')) return true;
+    return false;
+  },
+
+  // 判断是否为 B 站视频资源（通过 streamType 或 URL 特征判断）
+  isBilibiliVideo(resource) {
+    if (!resource) return false;
+    // 通过 streamType 标记判断
+    if (resource.streamType && resource.streamType.includes('B站')) return true;
+    // 通过 URL 域名判断
+    if (resource.url) {
+      try {
+        const hostname = new URL(resource.url).hostname;
+        if (hostname.includes('bilivideo.com') || hostname.includes('bilivideo.cn') || hostname.includes('hdslb.com')) {
+          return true;
+        }
+      } catch {}
+    }
+    // 如果当前页面是 B 站视频页面,且资源是视频类型
+    if (this.isBilibiliPage() && resource.type === 'video') return true;
+    return false;
+  },
+
+  // 视频预处理：添加到已选后立即触发
+  async preprocessVideoIfNeeded(resource) {
+    if (!this.needsPreprocess(resource)) return;
+
+    // 标记为转码中
+    resource.preprocessStatus = 'processing';
+    this.renderResources();
+
+    try {
+      const referer = this.getCurrentUrl();
+      const result = await window.electronAPI.preprocessVideo(
+        resource.url,
+        referer,
+        this.safeFileName(resource.name || 'video')
+      );
+
+      if (result && result.success) {
+        resource.localPath = result.localPath;
+        resource.preprocessExt = result.ext;
+        resource.preprocessStatus = 'done';
+        this.setStatus(`视频预处理完成: ${resource.name || 'video'}`);
+      } else {
+        resource.preprocessStatus = 'failed';
+        this.setStatus(`视频预处理失败: ${result?.error || '未知错误'}`);
+      }
+    } catch (err) {
+      resource.preprocessStatus = 'failed';
+      console.error('Video preprocess failed:', err);
+    }
+
+    this.renderResources();
+  },
+
+  // 智能导出到文件夹（带下载进度对话框）
+  async exportToFolder() {
+    const selected = this.getAllSelectedResources();
+    if (selected.length === 0) {
+      this.showToast('请先选择要导出的资源');
+      return;
+    }
+
+    // 选择导出目录
+    const destDir = await window.electronAPI.selectDirectory();
+    if (!destDir) return;
+
+    // 打开下载进度对话框
+    this.showDownloadDialog(selected.length);
+    this.setStatus('正在导出资源…');
+
+    let successCount = 0;
+    let failCount = 0;
+    const total = selected.length;
+    this.state.downloadCancelled = false; // 重置渲染进程取消标志
+    // 重置主进程全局取消标志
+    if (window.electronAPI?.resetDownloadCancel) {
+      await window.electronAPI.resetDownloadCancel();
+    }
+    const activeFileIds = new Set(); // 跟踪活跃的 B站视频 fileId
+
+    // B站视频进度监听（全局，通过 fileId 分发到对应项）
+    let biliProgressUnsubscribe = null;
+    if (window.electronAPI.onBilibiliDownloadProgress) {
+      biliProgressUnsubscribe = window.electronAPI.onBilibiliDownloadProgress((data) => {
+        if (data.fileId && activeFileIds.has(data.fileId)) {
+          this.updateDownloadItem(data.fileId, data);
+        }
+      });
+    }
+
+    for (let i = 0; i < selected.length; i++) {
+      // 检查取消标志
+      if (this.state.downloadCancelled) {
+        // 将剩余项标记为已取消
+        for (let j = i; j < selected.length; j++) {
+          const res = selected[j];
+          const isBili = this.isBilibiliVideo(res);
+          const cancelFileId = isBili ? 'bili_' + j : (res.type === 'video' ? 'video_' + j : (res.type === 'text' ? 'text_' + j : 'img_' + j));
+          this.updateDownloadItemStatus(cancelFileId, 'error', '已取消');
+        }
+        break;
+      }
+
+      const resource = selected[i];
+      // 生成与 showDownloadDialog 一致的 fileId
+      const isBili = this.isBilibiliVideo(resource);
+      const fileId = isBili ? 'bili_' + i : (resource.type === 'video' ? 'video_' + i : (resource.type === 'text' ? 'text_' + i : 'img_' + i));
+
+      // 更新对话框：开始处理第 i 项
+      this.updateDownloadDialogProgress(i, total);
+      this.updateDownloadItemStatus(fileId, 'processing', resource.name || 'resource');
+      this.setStatus(`导出中 ${i + 1}/${total}…`);
+
+      try {
+        const result = await this.exportSingleResource(resource, destDir, i, fileId, activeFileIds);
+        if (result && result.success) {
+          successCount++;
+          this.updateDownloadItemStatus(fileId, 'done', result.title || resource.name || 'resource');
+        } else {
+          failCount++;
+          this.updateDownloadItemStatus(fileId, 'error', result?.error || '未知错误');
+          console.error('Export failed:', resource.name, result?.error);
+        }
+      } catch (err) {
+        failCount++;
+        this.updateDownloadItemStatus(fileId, 'error', err.message || '异常');
+        console.error('Export error:', resource.name, err);
+      }
+
+      // 更新总进度
+      this.updateDownloadDialogProgress(i + 1, total);
+    }
+
+    // 移除 B站视频进度监听
+    if (biliProgressUnsubscribe) biliProgressUnsubscribe();
+
+    // 导出完成
+    const wasCancelled = this.state.downloadCancelled;
+    this.finishDownloadDialog(successCount, failCount, wasCancelled);
+    if (wasCancelled) {
+      this.setStatus(`下载已取消: ${successCount} 成功, ${failCount} 失败`);
+      this.showToast(`下载已取消，已导出 ${successCount} 个资源`);
+    } else {
+      this.setStatus(`导出完成: ${successCount} 成功, ${failCount} 失败`);
+      this.showToast(`已导出 ${successCount} 个资源${failCount > 0 ? `, ${failCount} 个失败` : ''}`);
+    }
+
+    // 记录工作流
+    this.saveWorkflowRecord(selected, destDir);
+  },
+
+  // 导出单个资源
+  async exportSingleResource(resource, destDir, index, fileId, activeFileIds) {
+    // 文本资源：直接保存为 txt
+    if (resource.type === 'text' || resource.content) {
+      const fileName = this.safeFileName(resource.name || `text_${index}`) + '.txt';
+      const filePath = this.pathJoin(destDir, fileName);
+      return await window.electronAPI.saveTextFile(filePath, resource.content || '');
+    }
+
+    if (!resource.url) {
+      return { success: false, error: '资源无 URL' };
+    }
+
+    // 视频资源优先使用页面标题作为文件名，其他资源用 resource.name
+    const isVideo = resource.type === 'video';
+    const isBili = this.isBilibiliVideo(resource);
+    let baseName;
+    if (isVideo) {
+      // 视频使用页面标题命名，多个视频时追加序号避免覆盖
+      const pageTitle = this.getCurrentPageTitle();
+      if (pageTitle) {
+        baseName = this.safeFileName(pageTitle);
+        // 如果有多个视频资源，追加序号区分
+        const videoCount = (this.state.selectedResources.videos || []).length;
+        if (videoCount > 1) {
+          baseName = baseName + '_' + (index + 1);
+        }
+      } else {
+        baseName = this.safeFileName(resource.name || `video_${index}`);
+      }
+    } else {
+      baseName = this.safeFileName(resource.name || `resource_${index}`);
+    }
+
+    // B 站视频：使用专用下载器（传入页面 URL）
+    if (isVideo && isBili) {
+      const pageUrl = this.getCurrentUrl();
+      const fileName = baseName + '.mp4';
+      const savePath = this.pathJoin(destDir, fileName);
+      const biliFileId = 'bili_' + index;
+      activeFileIds.add(biliFileId);
+
+      this.updateDownloadItemStatus(biliFileId, 'processing', resource.name || 'B站视频');
+
+      try {
+        const result = await window.electronAPI.downloadBilibiliVideo(pageUrl, savePath, pageUrl, biliFileId);
+        activeFileIds.delete(biliFileId);
+        return result;
+      } catch (err) {
+        activeFileIds.delete(biliFileId);
+        throw err;
+      }
+    }
+
+    // 已预处理的视频：直接复制本地文件
+    if (isVideo && resource.localPath) {
+      const ext = resource.preprocessExt || 'mp4';
+      const fileName = baseName + '.' + ext;
+      const destPath = this.pathJoin(destDir, fileName);
+      this.updateDownloadItemStatus(fileId, 'done', resource.name || 'video');
+      return await window.electronAPI.copyLocalFile(resource.localPath, destPath);
+    }
+
+    // 普通视频：使用智能下载
+    if (isVideo) {
+      const fileName = baseName + '.mp4';
+      const savePath = this.pathJoin(destDir, fileName);
+      const videoFileId = 'video_' + index;
+      activeFileIds.add(videoFileId);
+
+      // 监听普通视频下载进度
+      let progressUnsubscribe = null;
+      if (window.electronAPI.onDownloadProgress) {
+        progressUnsubscribe = window.electronAPI.onDownloadProgress((data) => {
+          if (data.fileId === videoFileId || !data.fileId) {
+            this.updateDownloadItem(videoFileId, data);
+          }
+        });
+      }
+
+      try {
+        const result = await window.electronAPI.downloadVideoSmart(resource.url, savePath, this.getCurrentUrl(), videoFileId);
+        activeFileIds.delete(videoFileId);
+        if (progressUnsubscribe) progressUnsubscribe();
+        return result;
+      } catch (err) {
+        activeFileIds.delete(videoFileId);
+        if (progressUnsubscribe) progressUnsubscribe();
+        throw err;
+      }
+    }
+
+    // 图片/音频/链接：普通下载
+    const ext = this.getExtFromUrl(resource.url) || (resource.format ? resource.format.toLowerCase() : 'bin');
+    const fileName = baseName + '.' + ext;
+    const savePath = this.pathJoin(destDir, fileName);
+    const imgFileId = 'img_' + index;
+
+    this.updateDownloadItemStatus(imgFileId, 'processing', resource.name || 'resource');
+    const result = await window.electronAPI.downloadFile(resource.url, savePath, this.getCurrentUrl(), imgFileId);
+    if (result && result.success) {
+      this.updateDownloadItemStatus(imgFileId, 'done', resource.name || 'resource');
+    }
+    return result;
+  },
+
+  // ===== 下载进度对话框 =====
+  showDownloadDialog(totalCount) {
+    const overlay = document.getElementById('dlOverlay');
+    const body = document.getElementById('dlBody');
+    const closeBtn = document.getElementById('dlCloseBtn');
+    if (!overlay || !body) return;
+
+    // 隐藏 BrowserView（OS 级原生视图会覆盖 HTML 内容，导致对话框不可见）
+    if (window.electronAPI?.setBrowserviewVisible) {
+      window.electronAPI.setBrowserviewVisible(false);
+    }
+
+    // 构建下载项列表
+    const selected = this.getAllSelectedResources();
+    body.innerHTML = selected.map((resource, i) => {
+      const name = this.escapeHtml(resource.name || resource.url || `资源 ${i + 1}`);
+      const typeIcon = resource.type === 'video' ? '🎬' : (resource.type === 'image' ? '🖼' : (resource.type === 'text' ? '📝' : '📄'));
+      const isBili = this.isBilibiliVideo(resource);
+      const biliTag = isBili ? '<span style="color:#00a1d6;font-size:10px"> B站</span>' : '';
+      const fileId = isBili ? 'bili_' + i : (resource.type === 'video' ? 'video_' + i : (resource.type === 'text' ? 'text_' + i : 'img_' + i));
+      return `
+        <div class="dl-item" data-file-id="${fileId}">
+          <div class="dl-item-header">
+            <span class="dl-item-name">${typeIcon} ${name}${biliTag}</span>
+            <span class="dl-item-status" data-status>等待中</span>
+          </div>
+          <div class="dl-item-track"><div class="dl-item-fill" data-fill></div></div>
+          <div class="dl-item-detail" data-detail style="display:none">
+            <span data-downloaded>0 MB</span>
+            <span data-speed></span>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    document.getElementById('dlCount').textContent = `0 / ${totalCount}`;
+    document.getElementById('dlTotalPercent').textContent = '0%';
+    document.getElementById('dlTotalFill').style.width = '0%';
+    document.getElementById('dlTitle').textContent = '📥 正在导出资源';
+    if (closeBtn) closeBtn.style.display = 'none';
+    const cancelBtn = document.getElementById('dlCancelBtn');
+    if (cancelBtn) cancelBtn.style.display = '';
+
+    overlay.classList.add('show');
+  },
+
+  updateDownloadDialogProgress(current, total) {
+    const countEl = document.getElementById('dlCount');
+    const percentEl = document.getElementById('dlTotalPercent');
+    const fillEl = document.getElementById('dlTotalFill');
+    if (countEl) countEl.textContent = `${current} / ${total}`;
+    const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+    if (percentEl) percentEl.textContent = percent + '%';
+    if (fillEl) fillEl.style.width = percent + '%';
+  },
+
+  updateDownloadItem(fileId, data) {
+    const item = document.querySelector(`.dl-item[data-file-id="${fileId}"]`);
+    if (!item) return;
+
+    const fill = item.querySelector('[data-fill]');
+    const status = item.querySelector('[data-status]');
+    const detail = item.querySelector('[data-detail]');
+    const downloadedEl = item.querySelector('[data-downloaded]');
+    const speedEl = item.querySelector('[data-speed]');
+
+    // 主进程发送的是 progress 字段（兼容 percent）
+    const progress = data.progress !== undefined ? data.progress : data.percent;
+
+    if (progress !== undefined && fill) {
+      fill.style.width = progress + '%';
+    }
+    if (data.statusText && status) {
+      status.textContent = data.statusText;
+    } else if (data.stage === 'done' || data.status === 'done' || data.status === 'complete') {
+      if (status) status.textContent = '✓ 完成';
+      if (fill) { fill.style.width = '100%'; fill.classList.add('done'); }
+    } else if (data.stage === 'error' || data.status === 'error') {
+      if (status) status.textContent = '✗ 失败';
+      if (fill) fill.classList.add('error');
+    } else if (progress !== undefined && status) {
+      status.textContent = Math.round(progress) + '%';
+    }
+
+    // 显示已下载大小和速度
+    if ((data.downloaded !== undefined || data.total !== undefined) && detail) {
+      detail.style.display = 'flex';
+      if (downloadedEl && data.downloaded !== undefined) {
+        const dl = data.total ? `${(data.downloaded / 1048576).toFixed(1)} / ${(data.total / 1048576).toFixed(1)} MB` : `${(data.downloaded / 1048576).toFixed(1)} MB`;
+        downloadedEl.textContent = dl;
+      }
+      // statusText 中包含速度信息，提取显示
+      if (speedEl && data.statusText) {
+        speedEl.textContent = data.statusText;
+      }
+    }
+  },
+
+  updateDownloadItemStatus(fileId, status, name) {
+    const item = document.querySelector(`.dl-item[data-file-id="${fileId}"]`);
+    if (!item) return;
+
+    const fill = item.querySelector('[data-fill]');
+    const statusEl = item.querySelector('[data-status]');
+
+    if (status === 'processing') {
+      if (statusEl) statusEl.textContent = '⏳ 下载中…';
+    } else if (status === 'done') {
+      if (statusEl) statusEl.textContent = '✓ 完成';
+      if (fill) { fill.style.width = '100%'; fill.classList.add('done'); }
+    } else if (status === 'error') {
+      if (statusEl) statusEl.textContent = '✗ ' + (name || '失败');
+      if (fill) fill.classList.add('error');
+    }
+  },
+
+  finishDownloadDialog(successCount, failCount, cancelled = false) {
+    const titleEl = document.getElementById('dlTitle');
+    const closeBtn = document.getElementById('dlCloseBtn');
+    const cancelBtn = document.getElementById('dlCancelBtn');
+    if (titleEl) {
+      if (cancelled) {
+        titleEl.textContent = `⏹ 已取消: ${successCount} 成功${failCount > 0 ? `, ${failCount} 失败` : ''}`;
+      } else {
+        titleEl.textContent = `✅ 导出完成: ${successCount} 成功${failCount > 0 ? `, ${failCount} 失败` : ''}`;
+      }
+    }
+    if (closeBtn) closeBtn.style.display = '';
+    if (cancelBtn) cancelBtn.style.display = 'none';
+  },
+
+  // 取消下载
+  async cancelDownload() {
+    this.state.downloadCancelled = true;
+    // 通知主进程中止活跃的 HTTP 请求
+    if (window.electronAPI?.cancelDownload) {
+      await window.electronAPI.cancelDownload();
+    }
+    this.setStatus('正在取消下载…');
+  },
+
+  closeDownloadDialog() {
+    const overlay = document.getElementById('dlOverlay');
+    if (overlay) overlay.classList.remove('show');
+    // 恢复 BrowserView 显示
+    if (window.electronAPI?.setBrowserviewVisible) {
+      window.electronAPI.setBrowserviewVisible(this.state.currentModule === 'scraper');
+    }
+  },
+
+  // 从 URL 提取扩展名
+  getExtFromUrl(url) {
+    if (!url) return '';
+    try {
+      const u = new URL(url);
+      const pathname = u.pathname;
+      const dot = pathname.lastIndexOf('.');
+      if (dot > -1) return pathname.substring(dot + 1).toLowerCase();
+    } catch {}
+    // 从原始字符串提取
+    const qIdx = url.indexOf('?');
+    const path = qIdx > -1 ? url.substring(0, qIdx) : url;
+    const dot = path.lastIndexOf('.');
+    const slash = path.lastIndexOf('/');
+    if (dot > slash && dot > -1) return path.substring(dot + 1).toLowerCase();
+    return '';
+  },
+
+  // 保存工作流记录
+  async saveWorkflowRecord(resources, outputPath) {
+    try {
+      const pageTitle = this.getCurrentPageTitle() || this.getCurrentUrl() || '未命名';
+      const workflow = {
+        title: pageTitle,
+        url: this.getCurrentUrl(),
+        time: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        resourceCount: resources.length,
+        resources: resources.map(r => ({
+          type: r.type,
+          name: r.name || r.text || '',
+          url: r.url,
+          pageUrl: r.pageUrl || '',
+          format: r.format,
+          streamType: r.streamType,
+          content: r.content || r.text || ''
+        })),
+        outputPath: outputPath
+      };
+      if (window.electronAPI?.saveWorkflow) {
+        await window.electronAPI.saveWorkflow(workflow);
+      }
+    } catch (e) {
+      console.error('Save workflow failed:', e);
+    }
+  },
+
+  // ===== 历史记录 =====
+  addToHistory(url) {
+    this.state.history = this.state.history.filter(h => h !== url);
+    this.state.history.unshift(url);
+    if (this.state.history.length > 50) this.state.history.pop();
+  },
+
+  toggleHistory() {
+    const dropdown = document.getElementById('historyDropdown');
+    if (!dropdown) return;
+
+    if (dropdown.style.display === 'none') {
+      dropdown.style.display = 'block';
+      this.renderHistory();
+    } else {
+      dropdown.style.display = 'none';
+    }
+  },
+
+  renderHistory() {
+    const dropdown = document.getElementById('historyDropdown');
+    if (!dropdown) return;
+
+    if (this.state.history.length === 0) {
+      dropdown.innerHTML = '<div style="padding:16px;color:var(--text2);font-size:12px;text-align:center">暂无历史记录</div>';
+      return;
+    }
+
+    dropdown.innerHTML = this.state.history.map(url => `
+      <div style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" onclick="App.loadUrl('${this.escapeHtml(url)}'); App.toggleHistory()">
+        ${this.escapeHtml(url)}
+      </div>
+    `).join('');
+  },
+
+  // ===== 辅助功能 =====
+  showLoading(show) {
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) overlay.classList.toggle('hidden', !show);
+  },
+
+  setStatus(text) {
+    const statusText = document.getElementById('statusText');
+    if (statusText) statusText.textContent = text;
+  },
+
+  // 高速下载（多线程分块并行，区别于普通浏览器下载）
+  async fastDownload(url, name) {
+    if (!url) { this.showToast('下载链接无效'); return; }
+    try {
+      // 选择保存路径
+      const safeName = (name || 'download').replace(/[<>:"/\\|?*]/g, '_').substring(0, 80);
+      const probe = await window.electronAPI?.probeDownload?.(url);
+      let suggestedName = safeName;
+      let totalSize = 0;
+      let acceptRanges = false;
+      if (probe && probe.success) {
+        if (probe.filename) suggestedName = probe.filename;
+        totalSize = probe.total || 0;
+        acceptRanges = probe.acceptRanges;
+      }
+      // 补全扩展名
+      if (!/\.[a-z0-9]{1,5}$/i.test(suggestedName)) {
+        const m = url.match(/\.([a-z0-9]{1,5})(\?|#|$)/i);
+        if (m) suggestedName += '.' + m[1].toLowerCase();
+      }
+      const savePath = await window.electronAPI?.selectSaveFile?.({
+        defaultPath: suggestedName,
+        filters: [{ name: '所有文件', extensions: ['*'] }]
+      });
+      if (!savePath) return;
+
+      // 显示下载进度提示
+      const mode = acceptRanges && totalSize > 1024 * 1024 ? '⚡ 多线程并行' : '🔄 单线程';
+      const sizeStr = totalSize ? ' · ' + this.formatFileSize(totalSize) : '';
+      this.showToast(`${mode}下载开始${sizeStr}`);
+
+      const fileId = 'fast_' + Date.now();
+      const result = await window.electronAPI?.fastDownload?.(url, savePath, url, fileId);
+      if (result && result.success) {
+        const speedStr = result.avgSpeed ? ' · 平均 ' + this.formatFileSize(result.avgSpeed) + '/s' : '';
+        const modeStr = result.mode === 'parallel' ? '⚡ 多线程' : '🔄 单线程';
+        this.showToast(`✓ 下载完成：${result.filename || suggestedName}${speedStr}（${modeStr}）`);
+      } else {
+        this.showToast('✗ 下载失败：' + (result?.error || '未知错误'));
+      }
+    } catch (e) {
+      this.showToast('✗ 下载异常：' + (e.message || e));
+    }
+  },
+
+  showToast(message) {
+    const toast = document.getElementById('toast');
+    if (!toast) return;
+
+    toast.textContent = message;
+    toast.classList.add('show');
+
+    setTimeout(() => {
+      toast.classList.remove('show');
+    }, 2500);
+  },
+
+  escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  },
+
+  hideSpaBanner() {
+    const banner = document.getElementById('spaBanner');
+    if (banner) banner.classList.add('hidden');
+  },
+
+  closeExportDialog() {
+    const overlay = document.getElementById('exportOverlay');
+    if (overlay) overlay.classList.remove('show');
+  },
+
+  // 导出对话框"开始导出"入口（默认导出到文件夹）
+  startExport() {
+    this.closeExportDialog();
+    this.exportToFolder();
   }
 };
 
-function t(key) { return i18n[lang][key] || key; }
-
-function toggleLang() {
-  lang = lang === 'zh' ? 'en' : 'zh';
-  applyLanguage();
-  showToast('Language: ' + (lang === 'zh' ? '中文' : 'English'));
-}
-
-function applyLanguage() {
-  urlInput.placeholder = t('fetchPlaceholder');
-  fetchBtn.textContent = t('fetchBtn');
-  inspectToggle.textContent = t('inspectMode');
-  document.querySelector('.empty-text').textContent = t('emptyText');
-  document.querySelector('.empty-hint').textContent = t('emptyHint');
-
-  // 主标签页标题
-  const tabResources = document.querySelector('#resourceTabs .resource-tab[data-tab="resources"] span:first-child');
-  const tabSelected = document.querySelector('#resourceTabs .resource-tab[data-tab="selected"] span:first-child');
-  const tabTexts = document.querySelector('#resourceTabs .resource-tab[data-tab="texts"] span:first-child');
-  if (tabResources) tabResources.textContent = '🖼 ' + t('resourceLayer');
-  if (tabSelected) tabSelected.textContent = '✅ ' + t('selected');
-  if (tabTexts) tabTexts.textContent = '📝 ' + t('textLayer');
-
-  document.querySelector('#rightPanel .panel-header span:first-child').textContent = t('pageInfo');
-  const layerTitles = document.querySelectorAll('#panelBody .layer-title');
-  if (layerTitles.length >= 2) {
-    layerTitles[0].textContent = t('pageTitle');
-    layerTitles[layerTitles.length - 1].textContent = t('exportActions');
-  }
-
-  const exportBtns = document.querySelectorAll('.export-actions button');
-  if (exportBtns.length >= 3) {
-    exportBtns[0].textContent = t('exportFolder');
-    exportBtns[1].textContent = t('exportWSW');
-    exportBtns[2].textContent = t('exportExcel');
-  }
-
-  // 更新标签栏 "+" 按钮标题
-  const addBtn = tabBar ? tabBar.querySelector('.tab-add') : null;
-  if (addBtn) addBtn.title = t('newTab');
-}
-
-// ============ 侧边栏切换 ============
-function toggleSidebar() {
-  sidebarVisible = !sidebarVisible;
-  rightPanel.style.display = sidebarVisible ? 'flex' : 'none';
-  sidebarToggle.textContent = sidebarVisible ? '◀' : '▶';
-  // 通知主进程 sidebar 状态，使其正确计算 BrowserView 宽度
-  if (window.electronAPI && window.electronAPI.setSidebarVisible) {
-    window.electronAPI.setSidebarVisible(sidebarVisible);
-  } else if (window.electronAPI && window.electronAPI.updateBrowserBounds) {
-    window.electronAPI.updateBrowserBounds();
-  }
-}
-
-// ============ 窗口控制 ============
-function minimizeWindow() {
-  if (window.electronAPI && window.electronAPI.minimizeWindow) {
-    window.electronAPI.minimizeWindow();
-  }
-}
-
-function maximizeWindow() {
-  if (window.electronAPI && window.electronAPI.maximizeWindow) {
-    window.electronAPI.maximizeWindow();
-  }
-}
-
-function closeWindow() {
-  if (window.electronAPI && window.electronAPI.closeWindow) {
-    window.electronAPI.closeWindow();
-  }
-}
-
-// ============ 设置面板 ============
-function toggleSettings() {
-  const overlay = document.getElementById('settingsOverlay');
-  if (!overlay) return;
-  
-  if (overlay.classList.contains('show')) {
-    // 关闭设置面板，恢复 BrowserView
-    overlay.classList.remove('show');
-    if (window.electronAPI && window.electronAPI.setBrowserviewVisible) {
-      window.electronAPI.setBrowserviewVisible(true);
-    }
-  } else {
-    // 打开设置面板：先隐藏 BrowserView，再显示设置面板
-    // BrowserView 是原生元素，始终覆盖 HTML 内容，必须通过 removeBrowserView 隐藏
-    if (window.electronAPI && window.electronAPI.setBrowserviewVisible) {
-      window.electronAPI.setBrowserviewVisible(false).then(() => {
-        overlay.classList.add('show');
-        updateDashboard();
-      }).catch(() => {
-        // 如果 API 调用失败，仍然显示设置面板（可能没有活动标签）
-        overlay.classList.add('show');
-        updateDashboard();
-      });
-    } else {
-      overlay.classList.add('show');
-      updateDashboard();
-    }
-  }
-}
-
-// 更新仪表盘数据
-function updateDashboard() {
-  // 已提取资源总数
-  const totalResources = currentData ? 
-    (currentData.images?.length || 0) + 
-    (currentData.videos?.length || 0) + 
-    (currentData.audios?.length || 0) + 
-    (currentData.links?.length || 0) + 
-    (currentData.texts?.length || 0) : 0;
-  
-  // 已选资源数
-  const selectedCount = getSelectedTotal();
-  
-  // 已下载大小（从 localStorage 读取）
-  let downloadedSize = 0;
-  try {
-    downloadedSize = parseFloat(localStorage.getItem('downloadedSize') || '0');
-  } catch (e) {}
-  
-  // 导出次数（从 localStorage 读取）
-  let exportCount = 0;
-  try {
-    exportCount = parseInt(localStorage.getItem('exportCount') || '0');
-  } catch (e) {}
-  
-  // 更新 DOM
-  const dashTotal = document.getElementById('dashTotalResources');
-  const dashSelected = document.getElementById('dashSelectedResources');
-  const dashDownloaded = document.getElementById('dashDownloadedSize');
-  const dashExport = document.getElementById('dashExportCount');
-  
-  if (dashTotal) dashTotal.textContent = totalResources;
-  if (dashSelected) dashSelected.textContent = selectedCount;
-  if (dashDownloaded) dashDownloaded.textContent = formatBytes(downloadedSize);
-  if (dashExport) dashExport.textContent = exportCount;
-}
-
-function closeSettingsOnOverlay(event) {
-  if (event.target.id === 'settingsOverlay') {
-    toggleSettings();
-  }
-}
-
-// 显示/隐藏资源层
-function toggleShowResourceLayer() {
-  const toggle = document.getElementById('showResourceLayerToggle');
-  if (!toggle) return;
-  showResourceLayer = toggle.checked;
-  try {
-    localStorage.setItem('showResourceLayer', showResourceLayer ? 'true' : 'false');
-  } catch (e) {
-    console.warn('无法保存设置到 localStorage:', e);
-  }
-  applyResourceLayerVisibility();
-}
-
-function loadShowResourceLayerSetting() {
-  try {
-    // 强制清除旧值，默认隐藏资源层
-    localStorage.removeItem('showResourceLayer');
-    showResourceLayer = false;
-    const toggle = document.getElementById('showResourceLayerToggle');
-    if (toggle) {
-      toggle.checked = showResourceLayer;
-    }
-  } catch (e) {
-    console.warn('无法从 localStorage 加载设置:', e);
-  }
-  applyResourceLayerVisibility();
-}
-
-function applyResourceLayerVisibility() {
-  const resourceTabBtn = resourceTabs ? resourceTabs.querySelector('.resource-tab[data-tab="resources"]') : null;
-  const paneResources = document.getElementById('paneResources');
-  
-  // 确保 layerPanels 容器始终可见（已选和文本层也在里面）
-  if (layerPanels) {
-    layerPanels.style.display = 'flex';
-    layerPanels.style.flexDirection = 'column';
-  }
-  
-  if (showResourceLayer) {
-    // 显示资源层
-    if (resourceTabBtn) resourceTabBtn.style.display = '';
-    if (paneResources) {
-      paneResources.style.display = '';
-      // 如果资源层应该是活动的，确保它有 active 类
-      if (activeResourceTab === 'resources') {
-        paneResources.classList.add('active');
-      }
-    }
-  } else {
-    // 隐藏资源层：只隐藏资源层tab和内容，保留已选和文本层
-    if (resourceTabBtn) resourceTabBtn.style.display = 'none';
-    if (paneResources) {
-      paneResources.style.display = 'none';
-      paneResources.classList.remove('active');
-    }
-    // 如果当前在资源层，切换到已选
-    if (activeResourceTab === 'resources') {
-      switchResourceTab('selected');
-    }
-  }
-}
-
-// ============ 主题切换 ============
-function toggleTheme() {
-  currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
-  applyTheme();
-  saveThemeSetting();
-}
-
-function toggleThemeFromSettings() {
-  const toggle = document.getElementById('lightThemeToggle');
-  if (!toggle) return;
-  currentTheme = toggle.checked ? 'light' : 'dark';
-  applyTheme();
-  saveThemeSetting();
-}
-
-function applyTheme() {
-  const html = document.documentElement;
-  const themeBtn = document.getElementById('themeToggle');
-  const settingsToggle = document.getElementById('lightThemeToggle');
-
-  if (currentTheme === 'light') {
-    html.classList.add('light-theme');
-    if (themeBtn) themeBtn.textContent = '🌙';
-    if (settingsToggle) settingsToggle.checked = true;
-  } else {
-    html.classList.remove('light-theme');
-    if (themeBtn) themeBtn.textContent = '☀';
-    if (settingsToggle) settingsToggle.checked = false;
-  }
-}
-
-function saveThemeSetting() {
-  try {
-    localStorage.setItem('theme', currentTheme);
-  } catch (e) {
-    console.warn('无法保存主题设置到 localStorage:', e);
-  }
-}
-
-function loadThemeSetting() {
-  try {
-    const saved = localStorage.getItem('theme');
-    if (saved === 'light' || saved === 'dark') {
-      currentTheme = saved;
-    }
-    applyTheme();
-  } catch (e) {
-    console.warn('无法从 localStorage 加载主题设置:', e);
-  }
-}
-
-// SPA动态页面横幅显示/隐藏
-function showSpaBanner() {
-  const banner = document.getElementById('spaBanner');
-  if (banner) banner.classList.remove('hidden');
-}
-
-function hideSpaBanner() {
-  const banner = document.getElementById('spaBanner');
-  if (banner) banner.classList.add('hidden');
-}
-
-// ============ 标签页管理 ============
-function renderTabs() {
-  if (!tabBar) return;
-  const addBtn = tabBar.querySelector('.tab-add');
-  tabBar.innerHTML = '';
-
-  tabs.forEach(tab => {
-    const el = document.createElement('div');
-    el.className = 'tab' + (tab.id === activeTabId ? ' active' : '');
-    el.onclick = (e) => {
-      if (e.target.classList.contains('tab-close')) return;
-      doSwitchTab(tab.id);
-    };
-
-    const titleEl = document.createElement('span');
-    titleEl.className = 'tab-title';
-    titleEl.textContent = tab.title || tab.url;
-    titleEl.title = tab.title || tab.url;
-
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'tab-close';
-    closeBtn.textContent = '×';
-    closeBtn.onclick = (e) => { e.stopPropagation(); doCloseTab(tab.id); };
-
-    el.appendChild(titleEl);
-    el.appendChild(closeBtn);
-    tabBar.appendChild(el);
-  });
-
-  if (addBtn) tabBar.appendChild(addBtn);
-  else {
-    const newAddBtn = document.createElement('button');
-    newAddBtn.className = 'tab-add';
-    newAddBtn.textContent = '+';
-    newAddBtn.title = t('newTab');
-    newAddBtn.onclick = doAddNewTab;
-    tabBar.appendChild(newAddBtn);
-  }
-}
-
-// 主进程创建标签后的回调（初始标签 + 新建标签）
-function onTabCreatedFromMain(tabId, url, title) {
-  // 检查是否已存在
-  if (tabs.find(t => t.id === tabId)) return;
-
-  const tab = {
-    id: tabId,
-    url: url,
-    title: title || url,
-    currentData: null,
-    selected: new Set(),
-    selectedResources: createEmptySelectedResources(),
-    pageHistory: [url],
-    historyIndex: 0  // 当前在历史记录中的位置
-  };
-  tabs.push(tab);
-
-  // 更新全局状态指向新标签
-  if (activeTabId === null) {
-    // 首个标签：直接设置为活动标签
-    activeTabId = tabId;
-    currentData = null;
-    selected = tab.selected;
-    selectedResources = tab.selectedResources;
-    currentUrl = url;
-    urlInput.value = url;
-    clearLayerPanels();
-    // 始终显示 layerPanels（包含已选/文本层标签）
-    if (layerPanels) {
-      layerPanels.style.display = 'flex';
-      layerPanels.style.flexDirection = 'column';
-    }
-    // 应用资源层可见性设置（隐藏资源层tab和内容，保留已选/文本层）
-    applyResourceLayerVisibility();
-    setPageTitle('--');
-    updateSelectionCount();
-    updateExportBar();
-  } else {
-    // 后续标签：切换到新标签
-    doSwitchTab(tabId);
-  }
-
-  renderTabs();
-}
-
-// 切换到指定标签（调用主进程 switchTab，不重新加载页面）
-function doSwitchTab(tabId) {
-  if (tabId === activeTabId) return;
-  if (!tabs.find(t => t.id === tabId)) return;
-
-  // 通知主进程切换 BrowserView
-  if (window.electronAPI && window.electronAPI.switchTab) {
-    window.electronAPI.switchTab(tabId);
-  }
-
-  // 更新本地状态
-  activeTabId = tabId;
-  const tab = getActiveTab();
-  if (!tab) return;
-
-  currentUrl = tab.url;
-  urlInput.value = tab.url;
-
-  // 恢复该标签的数据
-  currentData = tab.currentData || null;
-
-  // 确保 selected 始终指向 tab.selected（同一个对象引用）
-  if (!tab.selected) {
-    tab.selected = new Set();
-  }
-  selected = tab.selected;
-
-  // 确保 selectedResources 始终指向 tab.selectedResources（同一个对象引用）
-  if (!tab.selectedResources) {
-    tab.selectedResources = createEmptySelectedResources();
-  }
-  selectedResources = tab.selectedResources;
-
-  // 更新 UI
-  // 始终显示 layerPanels（包含已选/文本层标签）
-  layerPanels.style.display = 'flex';
-  layerPanels.style.flexDirection = 'column';
-  if (currentData) {
-    emptyState.classList.add('hidden');
-    updateAll();
-    renderSelectedResources();
-  } else if (selectedResources && getSelectedTotal() > 0) {
-    // currentData 为空但已选资源有数据（用户在抓取模式下提取过元素）：显示面板，渲染已选资源
-    emptyState.classList.add('hidden');
-    // 清空主资源标签页（无数据）
-    if (imageList) imageList.innerHTML = '';
-    if (videoList) videoList.innerHTML = '';
-    if (audioList) audioList.innerHTML = '';
-    if (linkList) linkList.innerHTML = '';
-    if (textList) textList.innerHTML = '';
-    if (tabCountResources) tabCountResources.textContent = '0';
-    if (tabCountTexts) tabCountTexts.textContent = '0';
-    if (subImageCount) subImageCount.textContent = '0';
-    if (subVideoCount) subVideoCount.textContent = '0';
-    if (subAudioCount) subAudioCount.textContent = '0';
-    if (subLinkCount) subLinkCount.textContent = '0';
-    clearAllElementTabs();
-    // 渲染已选资源
-    renderSelectedResources();
-  } else {
-    clearLayerPanels();
-    // 只隐藏资源层内容，不隐藏整个 layerPanels
-    const paneResources = document.getElementById('paneResources');
-    if (paneResources) paneResources.style.display = 'none';
-  }
-  // 应用资源层可见性设置
-  applyResourceLayerVisibility();
-  setPageTitle(tab.title || '--');
-  updateSelectionCount();
-  updateExportBar();
-  updateNavButtons();
-  renderTabs();
-}
-
-// 关闭指定标签
-function doCloseTab(tabId) {
-  const idx = tabs.findIndex(t => t.id === tabId);
-  if (idx < 0) return;
-
-  // 通知主进程销毁 BrowserView
-  if (window.electronAPI && window.electronAPI.closeTab) {
-    window.electronAPI.closeTab(tabId);
-  }
-
-  tabs.splice(idx, 1);
-
-  if (tabs.length === 0) {
-    activeTabId = null;
-    currentUrl = '';
-    urlInput.value = '';
-    currentData = null;
-    selected = new Set();
-    selectedResources = createEmptySelectedResources();
-    clearLayerPanels();
-    // 只隐藏资源层内容，不隐藏整个 layerPanels
-    const paneResources = document.getElementById('paneResources');
-    if (paneResources) paneResources.style.display = 'none';
-    emptyState.classList.remove('hidden');
-    setPageTitle('--');
-    updateSelectionCount();
-    updateExportBar();
-  } else if (tabId === activeTabId) {
-    // 关闭的是当前标签，切换到最近的标签
-    const newTab = tabs[Math.min(idx, tabs.length - 1)];
-    doSwitchTab(newTab.id);
-  } else if (idx < tabs.findIndex(t => t.id === activeTabId)) {
-    // 关闭的标签在当前标签之前，索引偏移不需要处理（我们用 tabId 而非索引）
-  }
-
-  renderTabs();
-}
-
-// 新建标签页（打开百度）
-async function doAddNewTab() {
-  if (window.electronAPI && window.electronAPI.createTab) {
-    const result = await window.electronAPI.createTab('https://www.baidu.com');
-    if (result && result.tabId) {
-      // onTabCreatedFromMain 内部对非首标签会自动调用 doSwitchTab，无需在此重复调用
-      onTabCreatedFromMain(result.tabId, result.url, '百度');
-    }
-  }
-}
-
-// 更新当前标签的标题
-function updateActiveTabTitle(title) {
-  const tab = getActiveTab();
-  if (tab) {
-    tab.title = title;
-    renderTabs();
-  }
-}
-
-// ============ 资源面板：标签页切换 ============
-
-// 当前活动主标签页
-let activeResourceTab = 'selected';
-
-// 主标签页切换
-function switchResourceTab(tabName) {
-  activeResourceTab = tabName;
-  // 更新主标签栏 active 状态
-  const tabs = resourceTabs.querySelectorAll('.resource-tab');
-  tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
-  // 更新主标签页内容 active 状态
-  const panes = layerPanels.querySelectorAll('.tab-pane');
-  panes.forEach(p => p.classList.remove('active'));
-  const targetPane = document.getElementById('pane' + capitalize(tabName));
-  if (targetPane) {
-    targetPane.classList.add('active');
-    // 如果切换到资源标签页，恢复显示（可能被自动隐藏）
-    if (tabName === 'resources') {
-      // 只有当设置允许显示资源层时才恢复
-      if (showResourceLayer) {
-        targetPane.style.display = '';
-        const resourceTabBtn = resourceTabs.querySelector('.resource-tab[data-tab="resources"]');
-        if (resourceTabBtn) resourceTabBtn.style.display = '';
-      }
-    }
-  }
-  // 如果是元素标签页（动态创建的），需要特殊处理
-  if (tabName.startsWith('element-')) {
-    const elementPane = document.getElementById('pane-' + tabName);
-    if (elementPane) elementPane.classList.add('active');
-  }
-}
-
-// 子标签页切换
-function switchSubTab(parentTab, subTab) {
-  const paneId = 'pane' + capitalize(parentTab);
-  const pane = document.getElementById(paneId);
-  if (!pane) return;
-  // 更新子标签栏 active 状态
-  const subTabs = pane.querySelectorAll('.sub-tab');
-  subTabs.forEach(t => t.classList.toggle('active', t.dataset.subtab === subTab));
-  // 更新子标签页内容 active 状态
-  const subPanes = pane.querySelectorAll('.sub-pane');
-  subPanes.forEach(p => p.classList.toggle('active', p.dataset.subpane === subTab));
-}
-
-// 字符串首字母大写
-function capitalize(str) {
-  if (!str) return '';
-  // 处理 element-xxx 格式
-  if (str.startsWith('element-')) return '';
-  return str.charAt(0).toUpperCase() + str.slice(1);
-}
-
-// ============ 选中元素标签页管理（抓取模式下动态创建） ============
-
-// 存储所有选中元素的标签页 { id, title, element, resources }
-let elementTabs = [];
-let elementTabCounter = 0;
-
-// 创建选中元素标签页
-function createElementTab(element, resources, counts) {
-  elementTabCounter++;
-  const tabId = 'element-' + elementTabCounter;
-  const tag = element.tagName.toLowerCase();
-  const idStr = element.id ? `#${element.id}` : '';
-  const cls = element.className && typeof element.className === 'string'
-    ? '.' + element.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
-  const title = `<${tag}${idStr}${cls}>`;
-
-  // 创建主标签按钮
-  const tabBtn = document.createElement('div');
-  tabBtn.className = 'resource-tab';
-  tabBtn.dataset.tab = tabId;
-  tabBtn.innerHTML = `<span>🎯 ${escapeHtml(title)}</span><span class="tab-count">${counts.total}</span><span class="tab-close" style="margin-left:4px;cursor:pointer;font-size:14px;opacity:0.6;">×</span>`;
-  tabBtn.onclick = (e) => {
-    if (e.target.classList.contains('tab-close')) {
-      e.stopPropagation();
-      removeElementTab(tabId);
-      return;
-    }
-    switchResourceTab(tabId);
-  };
-  resourceTabs.appendChild(tabBtn);
-
-  // 创建标签页内容
-  const pane = document.createElement('div');
-  pane.className = 'tab-pane';
-  pane.id = 'pane-' + tabId;
-
-  // 元素信息
-  const infoHtml = `
-    <div style="padding:8px 12px;background:var(--darker);border-bottom:1px solid var(--border);font-size:11px;color:var(--text-dim);">
-      <div style="margin-bottom:4px;"><code style="background:var(--dark);padding:2px 6px;border-radius:4px;color:var(--primary);">${escapeHtml(title)}</code></div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <span>🖼 ${counts.images}</span><span>🎬 ${counts.videos}</span><span>🎵 ${counts.audios}</span>
-        <span>🔗 ${counts.links}</span><span>📝 ${counts.texts}</span>
-      </div>
-      ${element.textContent ? `<div style="margin-top:6px;max-height:60px;overflow:hidden;opacity:0.7;">${escapeHtml(element.textContent.substring(0, 120))}...</div>` : ''}
-    </div>`;
-
-  // 子标签页：图片/视频/音频/链接/文本
-  const subTabsHtml = `
-    <div class="sub-tabs">
-      <div class="sub-tab active" data-subtab="${tabId}-images" onclick="switchElementSubTab('${tabId}','images')"><span>📷 图片</span><span class="sub-count">${counts.images}</span></div>
-      <div class="sub-tab" data-subtab="${tabId}-videos" onclick="switchElementSubTab('${tabId}','videos')"><span>🎬 视频</span><span class="sub-count">${counts.videos}</span></div>
-      <div class="sub-tab" data-subtab="${tabId}-audios" onclick="switchElementSubTab('${tabId}','audios')"><span>🎵 音频</span><span class="sub-count">${counts.audios}</span></div>
-      <div class="sub-tab" data-subtab="${tabId}-links" onclick="switchElementSubTab('${tabId}','links')"><span>🔗 链接</span><span class="sub-count">${counts.links}</span></div>
-      <div class="sub-tab" data-subtab="${tabId}-texts" onclick="switchElementSubTab('${tabId}','texts')"><span>📝 文本</span><span class="sub-count">${counts.texts}</span></div>
-    </div>`;
-
-  pane.innerHTML = infoHtml + subTabsHtml;
-
-  // 各子标签页内容容器
-  const types = ['images', 'videos', 'audios', 'links', 'texts'];
-  types.forEach((type, idx) => {
-    const subPane = document.createElement('div');
-    subPane.className = 'sub-pane' + (idx === 0 ? ' active' : '');
-    subPane.dataset.subpane = `${tabId}-${type}`;
-    const list = document.createElement('div');
-    list.className = 'resource-list' + (type === 'links' || type === 'texts' ? ' list-mode' : '');
-    list.id = `${tabId}-${type}-list`;
-    subPane.appendChild(list);
-    pane.appendChild(subPane);
-  });
-
-  layerPanels.appendChild(pane);
-
-  // 渲染各类型资源
-  renderElementTabResources(tabId, resources);
-
-  // 存储并切换到新标签页
-  elementTabs.push({ id: tabId, title, element, resources });
-  switchResourceTab(tabId);
-
-  return tabId;
-}
-
-// 渲染选中元素标签页的资源
-function renderElementTabResources(tabId, resources) {
-  const imgList = document.getElementById(`${tabId}-images-list`);
-  const vidList = document.getElementById(`${tabId}-videos-list`);
-  const audList = document.getElementById(`${tabId}-audios-list`);
-  const lnkList = document.getElementById(`${tabId}-links-list`);
-  const txtList = document.getElementById(`${tabId}-texts-list`);
-
-  // 图片
-  if (imgList) {
-    const imgs = (resources.images || []).map(url => ({ type: 'image', url, name: getFileName(url), format: (getExt(url) || 'jpg').toUpperCase() }));
-    renderMediaCards(imgs, imgList, 'image');
-  }
-  // 视频
-  if (vidList) {
-    const vids = (resources.videos || []).map(v => {
-      const url = typeof v === 'string' ? v : v.url;
-      return { type: 'video', url, name: getFileName(url), format: (getExt(url) || 'mp4').toUpperCase() };
-    });
-    renderMediaCards(vids, vidList, 'video');
-  }
-  // 音频
-  if (audList) {
-    const auds = (resources.audios || []).map(url => ({ type: 'audio', url, name: getFileName(url), format: (getExt(url) || 'mp3').toUpperCase() }));
-    renderMediaCards(auds, audList, 'audio');
-  }
-  // 链接
-  if (lnkList) {
-    const links = (resources.links || []).map(l => ({ type: 'link', url: l.url, name: l.text || l.url, format: 'LINK' }));
-    renderLinks(links, lnkList);
-  }
-  // 文本
-  if (txtList) {
-    const texts = (resources.texts || []).map(t => ({ type: 'text', name: t.name || t.content?.substring(0, 30) || 'text', content: t.content || '', length: (t.content || '').length }));
-    renderTexts(texts, txtList);
-  }
-}
-
-// 选中元素标签页的子标签页切换
-function switchElementSubTab(tabId, subType) {
-  const pane = document.getElementById('pane-' + tabId);
-  if (!pane) return;
-  const subTabs = pane.querySelectorAll('.sub-tab');
-  subTabs.forEach(t => t.classList.toggle('active', t.dataset.subtab === `${tabId}-${subType}`));
-  const subPanes = pane.querySelectorAll('.sub-pane');
-  subPanes.forEach(p => p.classList.toggle('active', p.dataset.subpane === `${tabId}-${subType}`));
-}
-
-// 移除选中元素标签页
-function removeElementTab(tabId) {
-  // 移除标签按钮
-  const tabBtn = resourceTabs.querySelector(`.resource-tab[data-tab="${tabId}"]`);
-  if (tabBtn) tabBtn.remove();
-  // 移除标签页内容
-  const pane = document.getElementById('pane-' + tabId);
-  if (pane) pane.remove();
-  // 从存储中移除
-  elementTabs = elementTabs.filter(t => t.id !== tabId);
-  // 切换回资源标签页
-  if (activeResourceTab === tabId) {
-    switchResourceTab('resources');
-  }
-}
-
-// 清除所有选中元素标签页
-function clearAllElementTabs() {
-  elementTabs.forEach(t => {
-    const tabBtn = resourceTabs.querySelector(`.resource-tab[data-tab="${t.id}"]`);
-    if (tabBtn) tabBtn.remove();
-    const pane = document.getElementById('pane-' + t.id);
-    if (pane) pane.remove();
-  });
-  elementTabs = [];
-}
-
-// ============ 核心：加载URL（地址不同则新建标签页，相同则在当前标签导航） ============
-async function loadUrl() {
-  let url = urlInput.value.trim();
-  if (!url) return;
-
-  if (!url.startsWith('http://') && !url.startsWith('https://')) {
-    url = 'https://' + url;
-    urlInput.value = url;
-  }
-
-  const activeTab = getActiveTab();
-
-  // 地址与当前标签页相同，直接导航
-  if (activeTab && activeTab.url === url) {
-    if (window.electronAPI && window.electronAPI.browserNavigate) {
-      await window.electronAPI.browserNavigate(url);
-    }
-    return;
-  }
-
-  // 地址不同，创建新标签页
-  loadingOverlay.classList.remove('hidden');
-  emptyState.classList.add('hidden');
-  fetchBtn.disabled = true;
-  statusText.textContent = t('loading');
-
-  if (window.electronAPI && window.electronAPI.createTab) {
-    const result = await window.electronAPI.createTab(url);
-    if (result && result.tabId) {
-      onTabCreatedFromMain(result.tabId, result.url, url);
-    }
-  }
-
-  // 添加到全局历史
-  addToGlobalHistory(url);
-}
-
-// ============ 历史记录管理 ============
-function addToGlobalHistory(url) {
-  // 如果当前不在历史末尾，清除后续历史
-  if (historyIndex < globalHistory.length - 1) {
-    globalHistory = globalHistory.slice(0, historyIndex + 1);
-  }
-  // 避免重复添加相同的URL
-  if (globalHistory.length === 0 || globalHistory[globalHistory.length - 1] !== url) {
-    globalHistory.push(url);
-    historyIndex = globalHistory.length - 1;
-  }
-}
-
-// 后退
-async function goBack() {
-  const tab = getActiveTab();
-  if (!tab || tab.historyIndex <= 0) return;
-
-  tab.historyIndex--;
-  const url = tab.pageHistory[tab.historyIndex];
-  tab.url = url;
-  currentUrl = url;
-  urlInput.value = url;
-
-  if (window.electronAPI && window.electronAPI.browserNavigate) {
-    await window.electronAPI.browserNavigate(url);
-  }
-  renderTabs();
-  updateNavButtons();
-}
-
-// 前进
-async function goForward() {
-  const tab = getActiveTab();
-  if (!tab || tab.historyIndex >= tab.pageHistory.length - 1) return;
-
-  tab.historyIndex++;
-  const url = tab.pageHistory[tab.historyIndex];
-  tab.url = url;
-  currentUrl = url;
-  urlInput.value = url;
-
-  if (window.electronAPI && window.electronAPI.browserNavigate) {
-    await window.electronAPI.browserNavigate(url);
-  }
-  renderTabs();
-  updateNavButtons();
-}
-
-// 更新导航按钮状态
-function updateNavButtons() {
-  const tab = getActiveTab();
-  const backBtn = document.getElementById('backBtn');
-  const forwardBtn = document.getElementById('forwardBtn');
-  if (backBtn) backBtn.disabled = !tab || tab.historyIndex <= 0;
-  if (forwardBtn) forwardBtn.disabled = !tab || tab.historyIndex >= tab.pageHistory.length - 1;
-}
-
-// 切换历史记录下拉
-function toggleHistoryDropdown() {
-  const dropdown = document.getElementById('historyDropdown');
-  if (!dropdown) return;
-  if (dropdown.style.display === 'none') {
-    renderHistoryDropdown();
-    dropdown.style.display = 'block';
-  } else {
-    dropdown.style.display = 'none';
-  }
-}
-
-// 渲染历史记录下拉
-function renderHistoryDropdown() {
-  const dropdown = document.getElementById('historyDropdown');
-  if (!dropdown) return;
-
-  const tab = getActiveTab();
-  const history = tab ? tab.pageHistory : globalHistory;
-
-  let html = `<div class="history-header">
-    <span>${lang === 'zh' ? '浏览历史' : 'History'} (${history.length})</span>
-    <button onclick="clearHistory()">${lang === 'zh' ? '清除' : 'Clear'}</button>
-  </div>`;
-
-  if (history.length === 0) {
-    html += `<div class="history-item" style="color:var(--text-dim)">${lang === 'zh' ? '暂无历史记录' : 'No history'}</div>`;
-  } else {
-    for (let i = history.length - 1; i >= 0; i--) {
-      const url = history[i];
-      const isCurrent = tab && tab.url === url;
-      html += `<div class="history-item" style="${isCurrent ? 'color:var(--primary);font-weight:600' : ''}" onclick="navigateFromHistory('${url.replace(/'/g, "\\'")}')">${escapeHtml(url)}</div>`;
-    }
-  }
-
-  dropdown.innerHTML = html;
-}
-
-// 从历史记录导航
-async function navigateFromHistory(url) {
-  const dropdown = document.getElementById('historyDropdown');
-  if (dropdown) dropdown.style.display = 'none';
-
-  const activeTab = getActiveTab();
-
-  // 地址与当前标签页相同，直接导航
-  if (activeTab && activeTab.url === url) {
-    if (window.electronAPI && window.electronAPI.browserNavigate) {
-      await window.electronAPI.browserNavigate(url);
-    }
-    return;
-  }
-
-  // 地址不同，创建新标签页
-  loadingOverlay.classList.remove('hidden');
-  emptyState.classList.add('hidden');
-  fetchBtn.disabled = true;
-  statusText.textContent = t('loading');
-
-  if (window.electronAPI && window.electronAPI.createTab) {
-    const result = await window.electronAPI.createTab(url);
-    if (result && result.tabId) {
-      onTabCreatedFromMain(result.tabId, result.url, url);
-    }
-  }
-}
-
-// 清除历史
-function clearHistory() {
-  const tab = getActiveTab();
-  if (tab) {
-    tab.pageHistory = [tab.url];
-    tab.historyIndex = 0;
-  }
-  globalHistory = [];
-  historyIndex = -1;
-  renderHistoryDropdown();
-  updateNavButtons();
-}
-
-// 地址栏变化监听
-function setupUrlInputListener() {
-  let lastUrl = '';
-  urlInput.addEventListener('input', () => {
-    const currentInput = urlInput.value.trim();
-    if (currentInput && currentInput !== lastUrl) {
-      lastUrl = currentInput;
-    }
-  });
-}
-
-function clearLayerPanels() {
-  if (imageList) imageList.innerHTML = '';
-  if (videoList) videoList.innerHTML = '';
-  if (audioList) audioList.innerHTML = '';
-  if (linkList) linkList.innerHTML = '';
-  if (textList) textList.innerHTML = '';
-  if (selectedImageList) selectedImageList.innerHTML = '';
-  if (selectedVideoList) selectedVideoList.innerHTML = '';
-  if (selectedAudioList) selectedAudioList.innerHTML = '';
-  if (selectedLinkList) selectedLinkList.innerHTML = '';
-  if (selectedTextList) selectedTextList.innerHTML = '';
-  if (tabCountResources) tabCountResources.textContent = '0';
-  if (tabCountSelected) tabCountSelected.textContent = '0';
-  if (tabCountTexts) tabCountTexts.textContent = '0';
-  if (subImageCount) subImageCount.textContent = '0';
-  if (subVideoCount) subVideoCount.textContent = '0';
-  if (subAudioCount) subAudioCount.textContent = '0';
-  if (subLinkCount) subLinkCount.textContent = '0';
-  if (subSelectedImageCount) subSelectedImageCount.textContent = '0';
-  if (subSelectedVideoCount) subSelectedVideoCount.textContent = '0';
-  if (subSelectedAudioCount) subSelectedAudioCount.textContent = '0';
-  if (subSelectedLinkCount) subSelectedLinkCount.textContent = '0';
-  if (subSelectedTextCount) subSelectedTextCount.textContent = '0';
-  // 重置固定信息区
-  if (infoPageTitle) infoPageTitle.textContent = '--';
-  if (infoSelectedElementRow) infoSelectedElementRow.style.display = 'none';
-  if (infoSelectedElement) infoSelectedElement.textContent = '--';
-  // 清除所有选中元素标签页
-  clearAllElementTabs();
-  // 注意：selectedResources 数据由 tab 同步管理，此处不重置数据，只清空 UI
-}
-
-// ============ 监听主进程转发的事件 ============
-function setupEventListeners() {
-  // 主进程创建标签的通知（初始百度标签）— 监听器在 DOMContentLoaded 中注册，此处不重复注册
-
-  // BrowserView 页面加载完成
-  if (window.electronAPI && window.electronAPI.onBrowserDidFinishLoad) {
-    window.electronAPI.onBrowserDidFinishLoad((tabId) => {
-      // 只处理当前活动标签的事件
-      if (activeTabId !== null && tabId !== activeTabId) return;
-
-      loadingOverlay.classList.add('hidden');
-      fetchBtn.disabled = false;
-      statusText.textContent = t('extracting');
-
-      if (window.electronAPI && window.electronAPI.browserExtractAll) {
-        window.electronAPI.browserExtractAll();
-      }
-      if (window.electronAPI && window.electronAPI.browserGetTitle) {
-        window.electronAPI.browserGetTitle().then(title => {
-          setPageTitle(title || currentUrl);
-          updateActiveTabTitle(title || currentUrl);
-        }).catch(() => {});
-      }
-    });
-  }
-
-  // BrowserView 页面加载失败
-  if (window.electronAPI && window.electronAPI.onBrowserDidFailLoad) {
-    window.electronAPI.onBrowserDidFailLoad((detail, tabId) => {
-      if (activeTabId !== null && tabId !== activeTabId) return;
-
-      loadingOverlay.classList.add('hidden');
-      fetchBtn.disabled = false;
-      if (detail && detail.errorCode !== -3) {
-        showToast(t('error') + ': ' + (detail.errorDescription || 'Unknown error'));
-        statusText.textContent = t('error');
-      }
-    });
-  }
-
-  // BrowserView 导航事件
-  if (window.electronAPI && window.electronAPI.onBrowserDidNavigate) {
-    window.electronAPI.onBrowserDidNavigate((url, tabId) => {
-      if (activeTabId !== null && tabId !== activeTabId) return;
-      if (url) {
-        currentUrl = url;
-        urlInput.value = url;
-        
-        // 检测是否为单页应用(SPA)
-        const spaDomains = ['bilibili.com', 'douyin.com', 'weibo.com', 'taobao.com', 'tmall.com', 'kuaishou.com'];
-        const isSPA = spaDomains.some(domain => url.includes(domain));
-        if (isSPA) {
-          showSpaBanner();
-        } else {
-          hideSpaBanner();
-        }
-        
-        const tab = getActiveTab();
-        if (tab) {
-          tab.url = url;
-          // 更新页面历史（前进时清除后续历史）
-          if (tab.historyIndex < tab.pageHistory.length - 1) {
-            tab.pageHistory = tab.pageHistory.slice(0, tab.historyIndex + 1);
-          }
-          tab.pageHistory.push(url);
-          tab.historyIndex = tab.pageHistory.length - 1;
-          renderTabs();
-        }
-        // 添加到全局历史
-        addToGlobalHistory(url);
-      }
-    });
-  }
-
-  if (window.electronAPI && window.electronAPI.onBrowserDidNavigateInPage) {
-    window.electronAPI.onBrowserDidNavigateInPage((url, tabId) => {
-      if (activeTabId !== null && tabId !== activeTabId) return;
-      if (url) {
-        currentUrl = url;
-        urlInput.value = url;
-        const tab = getActiveTab();
-        if (tab) {
-          tab.url = url;
-          // 更新页面历史（前进时清除后续历史）
-          if (tab.historyIndex < tab.pageHistory.length - 1) {
-            tab.pageHistory = tab.pageHistory.slice(0, tab.historyIndex + 1);
-          }
-          tab.pageHistory.push(url);
-          tab.historyIndex = tab.pageHistory.length - 1;
-          renderTabs();
-        }
-        // 添加到全局历史
-        addToGlobalHistory(url);
-      }
-    });
-  }
-
-  // 资源提取结果
-  if (window.electronAPI && window.electronAPI.onResourcesExtracted) {
-    window.electronAPI.onResourcesExtracted((resources, tabId) => {
-      if (activeTabId !== null && tabId !== activeTabId) return;
-      if (resources) handleResourcesExtracted(resources);
-    });
-  }
-
-  // 页面标题
-  if (window.electronAPI && window.electronAPI.onPageTitle) {
-    window.electronAPI.onPageTitle((title, tabId) => {
-      if (activeTabId !== null && tabId !== activeTabId) return;
-      if (title) {
-        setPageTitle(title);
-        updateActiveTabTitle(title);
-      }
-    });
-  }
-
-  // 页面标题更新（来自 page-title-updated）
-  if (window.electronAPI && window.electronAPI.onBrowserPageTitleUpdated) {
-    window.electronAPI.onBrowserPageTitleUpdated((title, tabId) => {
-      if (activeTabId !== null && tabId !== activeTabId) return;
-      if (title) {
-        setPageTitle(title);
-        updateActiveTabTitle(title);
-      }
-    });
-  }
-
-  // 提取模式状态变化
-  if (window.electronAPI && window.electronAPI.onInspectModeChanged) {
-    window.electronAPI.onInspectModeChanged((enabled) => {
-      inspectMode = enabled;
-      inspectToggle.classList.toggle('active', inspectMode);
-    });
-  }
-
-  // 元素资源（点击提取，完整数据）
-  if (window.electronAPI && window.electronAPI.onElementResources) {
-    window.electronAPI.onElementResources((data) => {
-      if (data) handleElementResources(data);
-    });
-  }
-
-  // 元素悬停预览（hover 时显示预览）
-  if (window.electronAPI && window.electronAPI.onElementHoverPreview) {
-    window.electronAPI.onElementHoverPreview((data) => {
-      if (data) handleElementHoverPreview(data);
-    });
-  }
-
-  // 元素悬停清除（mouseout 时清除预览）
-  if (window.electronAPI && window.electronAPI.onElementHoverClear) {
-    window.electronAPI.onElementHoverClear(() => {
-      clearHoverPreview();
-    });
-  }
-
-  // 媒体批量
-  if (window.electronAPI && window.electronAPI.onMediaBatch) {
-    window.electronAPI.onMediaBatch((mediaArray) => {
-      if (mediaArray && Array.isArray(mediaArray)) {
-        mediaArray.forEach(media => addMediaResource(media));
-      }
-    });
-  }
-
-  // 媒体请求拦截（来自主进程 session 拦截）
-  if (window.electronAPI && window.electronAPI.onMediaRequestIntercepted) {
-    window.electronAPI.onMediaRequestIntercepted((media) => {
-      addMediaResource(media);
-    });
-  }
-
-  // window.open 被拦截后的 URL
-  if (window.electronAPI && window.electronAPI.onOpenUrlInWebview) {
-    window.electronAPI.onOpenUrlInWebview((url) => {
-      if (url && url.startsWith('http')) {
-        urlInput.value = url;
-        loadUrl();
-      }
-    });
-  }
-
-  // 下载进度监听
-  if (window.electronAPI && window.electronAPI.onDownloadProgress) {
-    window.electronAPI.onDownloadProgress((data) => {
-      if (data && typeof data.progress === 'number') {
-        showProgressBar(data);
-      }
-    });
-  }
-}
-
-// ============ 切换提取模式 ============
-function toggleInspect() {
-  inspectMode = !inspectMode;
-  inspectToggle.classList.toggle('active', inspectMode);
-  // 开启抓取模式时自动展开侧栏，关闭抓取模式时不自动折叠（保持侧栏当前状态，用户可手动折叠）
-  if (inspectMode) {
-    if (!sidebarVisible) {
-      sidebarVisible = true;
-      rightPanel.style.display = 'flex';
-      sidebarToggle.textContent = '';
-      if (window.electronAPI && window.electronAPI.setSidebarVisible) {
-        window.electronAPI.setSidebarVisible(true);
-      }
-    }
-  } else {
-    // 关闭抓取模式：不自动折叠侧栏，仅重置抓取资源面板
-    // 只隐藏资源层内容，不隐藏整个 layerPanels
-    const paneResources = document.getElementById('paneResources');
-    if (paneResources) paneResources.style.display = 'none';
-    emptyState.classList.remove('hidden');
-  }
-  if (window.electronAPI && window.electronAPI.browserToggleInspect) {
-    window.electronAPI.browserToggleInspect(inspectMode);
-  }
-}
-
-// ============ 添加媒体资源（来自主进程拦截） ============
-function addMediaResource(media) {
-  const tab = getActiveTab();
-  if (!tab) return;
-
-  if (!tab.currentData) {
-    tab.currentData = {
-      title: currentUrl, url: currentUrl,
-      images: [], videos: [], audios: [], links: [], documents: [], texts: [],
-      stats: { images: 0, videos: 0, audios: 0, links: 0, documents: 0, texts: 0, total: 0 }
-    };
-  }
-  currentData = tab.currentData;
-
-  const type = media.type;
-  const url = media.url;
-  if (!url) return;
-
-  if (type === 'image') {
-    if (!currentData.images.some(i => i.url === url)) {
-      currentData.images.push({ type: 'image', url, name: media.name || getFileName(url), format: media.format || (getExt(url) || 'jpg').toUpperCase(), width: 0, height: 0 });
-    }
-  } else if (type === 'video') {
-    if (!currentData.videos.some(v => v.url === url)) {
-      currentData.videos.push({ type: 'video', url, name: media.name || getFileName(url), format: media.format || (getExt(url) || 'mp4').toUpperCase(), duration: 0 });
-    }
-  } else if (type === 'audio') {
-    if (!currentData.audios.some(a => a.url === url)) {
-      currentData.audios.push({ type: 'audio', url, name: media.name || getFileName(url), format: media.format || (getExt(url) || 'mp3').toUpperCase(), duration: 0 });
-    }
-  }
-
-  updateStats();
-  updateAll();
-}
-
-// ============ 处理提取到的资源 ============
-function handleResourcesExtracted(resources) {
-  loadingOverlay.classList.add('hidden');
-  fetchBtn.disabled = false;
-
-  const tab = getActiveTab();
-  if (!tab) return;
-
-  if (!tab.currentData) {
-    tab.currentData = {
-      title: currentUrl, url: currentUrl,
-      images: [], videos: [], audios: [], links: [], documents: [], texts: [],
-      stats: { images: 0, videos: 0, audios: 0, links: 0, documents: 0, texts: 0, total: 0 }
-    };
-  }
-  currentData = tab.currentData;
-
-  const imageSet = new Set(currentData.images.map(i => i.url));
-  const videoSet = new Set(currentData.videos.map(v => v.url));
-  const audioSet = new Set(currentData.audios.map(a => a.url));
-  const linkSet = new Set(currentData.links.map(l => l.url));
-
-  (resources.images || []).forEach(url => {
-    if (!imageSet.has(url)) {
-      imageSet.add(url);
-      currentData.images.push({ type: 'image', url, name: getFileName(url), format: (getExt(url) || 'jpg').toUpperCase(), width: 0, height: 0 });
-    }
-  });
-
-  (resources.videos || []).forEach(v => {
-    const url = typeof v === 'string' ? v : v.url;
-    const streamType = typeof v === 'object' ? v.streamType : undefined;
-    if (!videoSet.has(url)) {
-      videoSet.add(url);
-      const item = { type: 'video', url, name: getFileName(url), format: (getExt(url) || 'mp4').toUpperCase(), duration: 0 };
-      if (streamType) item.streamType = streamType;
-      currentData.videos.push(item);
-    }
-  });
-
-  (resources.audios || []).forEach(url => {
-    if (!audioSet.has(url)) {
-      audioSet.add(url);
-      currentData.audios.push({ type: 'audio', url, name: getFileName(url), format: (getExt(url) || 'mp3').toUpperCase(), duration: 0 });
-    }
-  });
-
-  (resources.links || []).forEach(link => {
-    if (!linkSet.has(link.url)) {
-      linkSet.add(link.url);
-      currentData.links.push({ type: 'link', url: link.url, name: link.text || link.url, format: 'LINK' });
-    }
-  });
-
-  const textSet = new Set(currentData.texts.map(t => t.name));
-  (resources.texts || []).forEach(textItem => {
-    const name = textItem.name || textItem.content?.substring(0, 30) || 'text';
-    if (!textSet.has(name)) {
-      textSet.add(name);
-      currentData.texts.push({
-        type: 'text', name: name,
-        content: textItem.content || '',
-        length: (textItem.content || '').length
-      });
-    }
-  });
-
-  const docSet = new Set(currentData.documents.map(d => d.url));
-  (resources.documents || []).forEach(doc => {
-    const url = doc.url || doc;
-    if (!docSet.has(url)) {
-      docSet.add(url);
-      currentData.documents.push({
-        type: 'document', url: url,
-        name: doc.name || doc.text || getFileName(url),
-        format: doc.format || (getExt(url) || 'pdf').toUpperCase()
-      });
-    }
-  });
-
-  // selected 已指向 tab.selected，无需重新赋值
-  updateStats();
-  updateAll();
-  renderSelectedResources();
-  statusText.textContent = t('done') + ' — ' + currentData.stats.total + ' ' + t('items');
-  showToast(t('done') + ': ' + currentData.stats.total + ' ' + t('items'));
-}
-
-// ============ Hover 预览面板 ============
-const hoverPreviewPanel = document.getElementById('hoverPreviewPanel');
-const hoverPreviewSelector = document.getElementById('hoverPreviewSelector');
-const hoverPreviewBody = document.getElementById('hoverPreviewBody');
-
-// 处理悬停预览
-function handleElementHoverPreview(data) {
-  if (!inspectMode) return;
-  const { selector, counts, textPreview } = data;
-  if (!selector) return;
-
-  // 面板始终可见，仅更新内容
-  if (hoverPreviewSelector) hoverPreviewSelector.textContent = selector;
-
-  // 构建预览内容
-  if (hoverPreviewBody) {
-    const parts = [];
-    if (counts && counts.images > 0) parts.push(`<div class="hover-preview-item">📷 图片: ${counts.images} 个</div>`);
-    if (counts && counts.videos > 0) parts.push(`<div class="hover-preview-item">🎬 视频: ${counts.videos} 个</div>`);
-    if (counts && counts.audios > 0) parts.push(`<div class="hover-preview-item">🎵 音频: ${counts.audios} 个</div>`);
-    if (textPreview) parts.push(`<div class="hover-preview-text">📝 文本: ${escapeHtml(textPreview.substring(0, 60))}...</div>`);
-    
-    if (parts.length === 0) {
-      hoverPreviewBody.innerHTML = '<div class="hover-preview-empty">无资源</div>';
-    } else {
-      hoverPreviewBody.innerHTML = parts.join('');
-    }
-  }
-}
-
-// 清除悬停预览（重置为默认提示，不隐藏面板）
-function clearHoverPreview() {
-  if (!inspectMode) {
-    if (hoverPreviewSelector) hoverPreviewSelector.textContent = '--';
-    if (hoverPreviewBody) hoverPreviewBody.innerHTML = '<div class="hover-preview-empty">启用抓取模式后悬停元素查看预览</div>';
-  } else {
-    // 抓取模式下保留上次内容，仅清空选择器标识
-    if (hoverPreviewSelector) hoverPreviewSelector.textContent = '（移动鼠标选择元素）';
-  }
-}
-
-// ============ 处理元素资源（提取模式） ============
-function handleElementResources(data) {
-  const { element, resources } = data;
-
-  // 过滤掉无法预览的资源（blob: URL、无扩展名的 CDN 流等）
-  const filtered = filterPreviewableResources(resources);
-
-  const counts = {
-    images: (filtered.images || []).length,
-    videos: (filtered.videos || []).length,
-    audios: (filtered.audios || []).length,
-    links: (filtered.links || []).length,
-    texts: (filtered.texts || []).length
-  };
-  counts.total = counts.images + counts.videos + counts.audios + counts.links + counts.texts;
-
-  showToast(`${t('selectedElement')}: <${element.tagName.toLowerCase()}> - ${counts.images} ${t('images')}, ${counts.videos} ${t('videos')}, ${counts.audios} ${t('audios')}, ${counts.links} ${t('links')}, ${counts.texts} ${t('texts')}`);
-
-  // 已选资源层独立显示点击区域内的资源，不合并到主资源层（currentData）
-  // 将过滤后的元素资源追加到已选资源（按 URL/内容去重，直接存储完整对象）
-  const prevTotal = getSelectedTotal();
-  appendToSelectedResources(filtered);
-
-  // 同步 selected Set（仅用于主资源标签页卡片高亮显示）
-  syncSelectedSetFromSelectedResources();
-
-  // 更新固定信息区：选中元素文本
-  const tag = element.tagName.toLowerCase();
-  const idStr = element.id ? `#${element.id}` : '';
-  const cls = element.className && typeof element.className === 'string'
-    ? '.' + element.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
-  if (infoSelectedElementRow) infoSelectedElementRow.style.display = 'flex';
-  if (infoSelectedElement) {
-    const elemDesc = `<${tag}${idStr}${cls}>`;
-    const textPreview = element.textContent ? element.textContent.substring(0, 80) : '';
-    infoSelectedElement.textContent = textPreview ? `${elemDesc} ${textPreview}` : elemDesc;
-  }
-
-  // 为选中元素创建独立标签页（含文本和超链接）
-  createElementTab(element, filtered, counts);
-
-  const newTotal = getSelectedTotal();
-  if (newTotal > prevTotal) {
-    renderSelectedResources();
-    updateSelectionCount();
-    updateExportBar();
-  }
-
-  // 确保面板可见（即使 currentData 为空，只要有已选资源就显示）
-  if (newTotal > 0 && (!currentData || layerPanels.style.display === 'none')) {
-    layerPanels.style.display = 'flex';
-    layerPanels.style.flexDirection = 'column';
-    emptyState.classList.add('hidden');
-  }
-}
-
-// 图片 CDN 域名（无标准扩展名但实际是图片）
-const imageCdnDomains = [
-  'bdimg.com', 'bdstatic.com', 'sinaimg.cn', 'weibocdn.com',
-  'alicdn.com', 'taobaocdn.com', 'tmall.com',
-  'douyinstatic.com',
-  'iqiyi.com', 'qiyipic.com',
-  'youku.com', 'ykimg.com',
-  'v.qq.com', 'qqvideo.com',
-  'zhihu.com', 'zhimg.com',
-  'cdninstagram.com', 'fbcdn.net',
-  'twimg.com', 'gstatic.com', 'googleusercontent.com',
-  'wp.com', 'wordpress.com',
-  'medium.com', 'miro.medium.com'
-];
-
-// 视频 CDN 域名（无标准扩展名但实际是视频）
-const videoCdnDomains = [
-  'hdslb.com', 'bilivideo.com', 'bilivideo.cn',
-  'douyinvod.com', 'douyinstatic.com',
-  'iqiyi.com', 'qiyipic.com',
-  'youku.com', 'ykimg.com',
-  'v.qq.com', 'qqvideo.com',
-  'weibocdn.com', 'sinaimg.cn'
-];
-
-function isImageCdnUrl(url) {
-  try {
-    const hostname = new URL(url).hostname;
-    return imageCdnDomains.some(d => hostname.endsWith(d) || hostname === d);
-  } catch { return false; }
-}
-
-function isVideoCdnUrl(url) {
-  try {
-    const hostname = new URL(url).hostname;
-    return videoCdnDomains.some(d => hostname.endsWith(d) || hostname === d);
-  } catch { return false; }
-}
-
-// 过滤无法预览的资源（blob: URL、无扩展名的 CDN 流等）
-function filterPreviewableResources(resources) {
-  const result = { images: [], videos: [], audios: [], links: [], texts: [] };
-  if (!resources) return result;
-
-  // 图片：过滤 blob: 和 data:，保留 http/https URL（包括 CDN 域名）
-  result.images = (resources.images || []).filter(img => {
-    const url = typeof img === 'string' ? img : img.url;
-    if (!url) return false;
-    if (url.startsWith('blob:') || url.startsWith('data:')) return false;
-    // 有标准图片扩展名 或 来自已知图片 CDN
-    const ext = getExt(url);
-    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico', 'tiff'].includes(ext) || isImageCdnUrl(url);
-  });
-
-  // 视频：保留 blob: URL（MSE 流媒体）、标准视频扩展名、视频 CDN 域名
-  result.videos = (resources.videos || []).filter(v => {
-    const url = typeof v === 'string' ? v : v.url;
-    if (!url) return false;
-    // 保留 blob: URL（MSE 流媒体视频）
-    if (url.startsWith('blob:')) return true;
-    if (url.startsWith('data:')) return false;
-    const ext = getExt(url);
-    return ['mp4', 'webm', 'ogg', 'mov', 'mkv', 'avi', 'flv', 'm3u8', 'ts'].includes(ext) || isVideoCdnUrl(url);
-  });
-
-  // 音频：只保留有标准音频扩展名的，过滤 blob:
-  result.audios = (resources.audios || []).filter(a => {
-    const url = typeof a === 'string' ? a : a.url;
-    if (!url) return false;
-    if (url.startsWith('blob:') || url.startsWith('data:')) return false;
-    const ext = getExt(url);
-    return ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma'].includes(ext);
-  });
-
-  // 链接和文本：全部保留
-  result.links = resources.links || [];
-  result.texts = resources.texts || [];
-  return result;
-}
-
-// 获取当前页面标题（用于文件命名）
-function getCurrentPageTitle() {
-  return pageTitle && pageTitle.textContent && pageTitle.textContent !== '--'
-    ? pageTitle.textContent
-    : null;
-}
-
-// 将元素资源追加到 selectedResources（按 URL/内容去重）
-function appendToSelectedResources(resources) {
-  if (!selectedResources) selectedResources = createEmptySelectedResources();
-
-  const currentPageTitle = getCurrentPageTitle();
-
-  // 图片
-  (resources.images || []).forEach(img => {
-    const url = typeof img === 'string' ? img : img.url;
-    if (!url) return;
-    if (selectedResources.images.some(r => r.url === url)) return;
-    selectedResources.images.push({
-      type: 'image', url: url,
-      name: (img && img.name) || getFileName(url),
-      format: (img && img.format) || (getExt(url) || 'jpg').toUpperCase(),
-      width: img && img.width, height: img && img.height,
-      pageTitle: currentPageTitle  // 保存页面标题用于导出命名
-    });
-  });
-
-  // 视频
-  (resources.videos || []).forEach(v => {
-    const url = typeof v === 'string' ? v : v.url;
-    if (!url) return;
-    // blob: URL 用 streamType 或序号去重，避免重复添加
-    if (selectedResources.videos.some(r => r.url === url || (url.startsWith('blob:') && r.url.startsWith('blob:') && r.streamType === (v && v.streamType)))) return;
-    const videoItem = {
-      type: 'video', url: url,
-      name: (v && v.name) || (url.startsWith('blob:') ? '流媒体视频' : getFileName(url)),
-      format: (v && v.format) || (url.startsWith('blob:') ? 'BLOB' : (getExt(url) || 'mp4').toUpperCase()),
-      duration: v && v.duration,
-      streamType: v && v.streamType,
-      localPath: null,      // 预处理后的本地文件路径
-      processing: false,    // 是否正在预处理
-      processed: false,     // 是否已完成预处理
-      pageTitle: currentPageTitle  // 保存页面标题用于导出命名
-    };
-    selectedResources.videos.push(videoItem);
-    // 对流媒体视频提前预处理（blob:/m3u8/无扩展名 CDN 流）
-    preprocessVideoIfNeeded(videoItem);
-  });
-
-  // 音频
-  (resources.audios || []).forEach(a => {
-    const url = typeof a === 'string' ? a : a.url;
-    if (!url) return;
-    if (selectedResources.audios.some(r => r.url === url)) return;
-    selectedResources.audios.push({
-      type: 'audio', url: url,
-      name: (a && a.name) || getFileName(url),
-      format: (a && a.format) || (getExt(url) || 'mp3').toUpperCase(),
-      pageTitle: currentPageTitle  // 保存页面标题用于导出命名
-    });
-  });
-
-  // 链接
-  (resources.links || []).forEach(l => {
-    const url = l && (l.url || l);
-    if (!url || typeof url !== 'string') return;
-    if (selectedResources.links.some(r => r.url === url)) return;
-    selectedResources.links.push({
-      type: 'link', url: url,
-      name: (l && (l.text || l.name)) || getFileName(url),
-      format: 'LINK',
-      pageTitle: currentPageTitle
-    });
-  });
-
-  // 文本（按内容去重）
-  (resources.texts || []).forEach(tx => {
-    const content = (tx && (tx.content || tx.text)) || '';
-    if (!content) return;
-    if (selectedResources.texts.some(r => r.content === content)) return;
-    selectedResources.texts.push({
-      type: 'text',
-      name: (tx && tx.name) || content.substring(0, 30) || 'text',
-      content: content,
-      length: content.length,
-      pageTitle: currentPageTitle
-    });
-  });
-}
-
-// 同步 selected Set：用于主资源标签页卡片高亮（保留旧 Set 机制以兼容卡片选中态显示）
-function syncSelectedSetFromSelectedResources() {
-  if (!selected) return;
-  // 清空并重建
-  selected.clear();
-  if (!selectedResources) return;
-  selectedResources.images.forEach(r => selected.add(r.url));
-  selectedResources.videos.forEach(r => selected.add(r.url));
-  selectedResources.audios.forEach(r => selected.add(r.url));
-  selectedResources.links.forEach(r => selected.add(r.url));
-  // 文本通过内容前 20 字符标识
-  selectedResources.texts.forEach(r => selected.add('text_' + (r.content || '').substring(0, 20)));
-}
-
-// 判断视频是否需要预处理（blob:/m3u8/无扩展名 CDN 流）
-function needsPreprocess(url) {
-  if (!url) return false;
-  // B站页面视频不需要预处理，导出时用专用下载（fnval=0 单文件 MP4）
-  if (isBilibiliVideoUrl(currentUrl)) return false;
-  if (url.startsWith('blob:')) return true;
-  if (url.includes('.m3u8') || getExt(url) === 'm3u8') return true;
-  // 无扩展名且来自视频 CDN
-  const ext = getExt(url);
-  if (!ext && isVideoCdnUrl(url)) return true;
-  return false;
-}
-
-// 对单个视频项进行预处理（提前转码为可播放的本地文件）
-async function preprocessVideoIfNeeded(videoItem) {
-  if (!videoItem || videoItem.processing || videoItem.processed) return;
-  if (!needsPreprocess(videoItem.url)) return;
-
-  videoItem.processing = true;
-  renderSelectedResources();
-
-  try {
-    if (!window.electronAPI || !window.electronAPI.preprocessVideo) return;
-    const result = await window.electronAPI.preprocessVideo(videoItem.url, currentUrl, videoItem.name);
-    if (result && result.success) {
-      if (result.localPath) {
-        // blob:/m3u8 已下载到本地临时文件
-        videoItem.localPath = result.localPath;
-        videoItem.format = (result.ext || 'mp4').toUpperCase();
-        videoItem.processed = true;
-        videoItem.streamType = '已转码';
-        showToast(`视频已转码: ${videoItem.name}`);
-      } else if (result.ext) {
-        // 普通 HTTP 仅修正扩展名
-        videoItem.format = result.ext.toUpperCase();
-        videoItem.processed = true;
-      }
-    } else {
-      videoItem.streamType = '转码失败';
-      console.error('视频预处理失败:', videoItem.url, result && result.error);
-    }
-  } catch (e) {
-    videoItem.streamType = '转码失败';
-    console.error('视频预处理异常:', videoItem.url, e);
-  } finally {
-    videoItem.processing = false;
-    renderSelectedResources();
-  }
-}
-
-// updateSelectedElementInfo 已移除：元素信息现在显示在独立的元素标签页中
-
-
-// ============ 更新统计 ============
-function updateStats() {
-  if (!currentData) return;
-  currentData.stats = {
-    images: currentData.images.length,
-    videos: currentData.videos.length,
-    audios: currentData.audios.length,
-    links: currentData.links.length,
-    documents: currentData.documents.length,
-    texts: currentData.texts.length,
-    total: currentData.images.length + currentData.videos.length + currentData.audios.length +
-           currentData.links.length + currentData.documents.length + currentData.texts.length
-  };
-}
-
-// ============ 更新三层面板 ============
-function updateAll() {
-  if (!currentData) return;
-
-  // 始终显示 layerPanels（包含已选/文本层标签）
-  layerPanels.style.display = 'flex';
-  layerPanels.style.flexDirection = 'column';
-  emptyState.classList.add('hidden');
-
-  // 应用资源层可见性设置（隐藏/显示资源层tab）
-  applyResourceLayerVisibility();
-
-  // 资源标签页总数 = 图片 + 视频 + 音频 + 链接
-  const resourceTotal = currentData.stats.images + currentData.stats.videos + currentData.stats.audios + currentData.stats.links + currentData.stats.documents;
-  if (tabCountResources) tabCountResources.textContent = resourceTotal;
-  if (tabCountTexts) tabCountTexts.textContent = currentData.stats.texts;
-  if (subImageCount) subImageCount.textContent = currentData.stats.images;
-  if (subVideoCount) subVideoCount.textContent = currentData.stats.videos;
-  if (subAudioCount) subAudioCount.textContent = currentData.stats.audios;
-  if (subLinkCount) subLinkCount.textContent = currentData.stats.links + currentData.stats.documents;
-  // 更新固定信息区页面标题
-  if (infoPageTitle) infoPageTitle.textContent = pageTitle.textContent || currentUrl || '--';
-
-  renderThreeLayers();
-}
-
-// ============ 渲染三层资源 ============
-function renderThreeLayers() {
-  if (!currentData) return;
-
-  renderMediaCards(currentData.images, imageList, 'image');
-  renderMediaCards(currentData.videos, videoList, 'video');
-  renderMediaCards(currentData.audios, audioList, 'audio');
-  renderLinks(currentData.links, linkList);
-  renderTexts(currentData.texts, textList);
-
-  updateSelectionCount();
-}
-
-// ============ 渲染媒体卡片（图片/视频/音频） ============
-function renderMediaCards(data, container, mediaType, isRemovable = false) {
-  if (!container) return;
-  container.innerHTML = '';
-
-  if (!data || data.length === 0) {
-    container.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-dim);font-size:11px;">${t('noResources')}</div>`;
-    return;
-  }
-
-  data.forEach((item, idx) => {
-    const key = item.url;
-    const isSel = selected.has(key);
-    const card = document.createElement('div');
-    card.className = 'resource-card' + (isSel ? ' selected' : '');
-    card.dataset.url = key;
-    card.dataset.mediaType = mediaType;
-    card.dataset.index = idx;
-    if (isRemovable) card.style.cursor = 'pointer';
-
-    let preview;
-    if (mediaType === 'image') {
-      preview = `<img src="${escapeHtml(item.url)}" loading="lazy" onerror="this.parentElement.innerHTML='<span class=\\'icon-large\\'>🖼️</span>'">`;
-    } else if (mediaType === 'video') {
-      preview = '<span class="icon-large">🎬</span>';
-    } else {
-      preview = '<span class="icon-large"></span>';
-    }
-
-    let metaHtml = `<span>${item.format || ''}</span>`;
-    if (item.width && item.height) metaHtml += `<span>${item.width}x${item.height}</span>`;
-    if (item.duration) metaHtml += `<span>${item.duration}</span>`;
-    if (item.processing) {
-      metaHtml += `<span style="color:var(--warning);">⏳ 转码中...</span>`;
-    } else if (item.localPath) {
-      metaHtml += `<span style="color:var(--success);">✓ 已转码</span>`;
-    } else if (item.streamType) {
-      metaHtml += `<span>${item.streamType}</span>`;
-    }
-
-    card.innerHTML = `
-      <div class="card-preview">${preview}</div>
-      <div class="card-info">
-        <div class="card-name" title="${escapeHtml(item.name || item.url)}">${escapeHtml(item.name || item.url)}</div>
-        <div class="card-meta">${metaHtml}</div>
-      </div>
-      <div class="card-check"></div>`;
-
-    // 仅已选面板的卡片支持点击移除（先取消勾选再移除）
-    if (isRemovable) {
-      card.addEventListener('click', () => {
-        // 先取消勾选（视觉反馈）
-        card.classList.remove('selected');
-        // 然后移除已选内容
-        removeFromSelectedResources(mediaType, idx);
-      });
-    }
-
-    container.appendChild(card);
-  });
-}
-
-// 从已选资源中移除指定项
-function removeFromSelectedResources(mediaType, idx) {
-  if (!selectedResources) return;
-
-  let removed = false;
-  if (mediaType === 'image' && selectedResources.images[idx]) {
-    selectedResources.images.splice(idx, 1);
-    removed = true;
-  } else if (mediaType === 'video' && selectedResources.videos[idx]) {
-    selectedResources.videos.splice(idx, 1);
-    removed = true;
-  } else if (mediaType === 'audio' && selectedResources.audios[idx]) {
-    selectedResources.audios.splice(idx, 1);
-    removed = true;
-  }
-
-  if (removed) {
-    syncSelectedSetFromSelectedResources();
-    renderSelectedResources();
-    updateSelectionCount();
-    updateExportBar();
-    showToast('已移除资源');
-  }
-}
-
-// ============ 渲染链接列表 ============
-function renderLinks(data, container, isRemovable = false) {
-  if (!container) return;
-  container.innerHTML = '';
-
-  const allLinks = [...(data || []), ...((currentData && currentData.documents) || [])];
-
-  if (allLinks.length === 0) {
-    container.innerHTML = `<div style="text-align:center;padding:16px;color:var(--text-dim);font-size:11px;">${t('noResources')}</div>`;
-    return;
-  }
-
-  allLinks.forEach((item, idx) => {
-    const key = item.url;
-    const isSel = selected.has(key);
-    const row = document.createElement('div');
-    row.className = 'link-row' + (isSel ? ' selected' : '');
-    row.dataset.index = idx;
-    if (isRemovable) row.style.cursor = 'pointer';
-
-    const icon = item.type === 'document' ? '' : '🔗';
-    row.innerHTML = `
-      <span class="link-icon">${icon}</span>
-      <span class="link-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
-      <span class="link-url" title="${escapeHtml(item.url)}">${escapeHtml(item.url)}</span>
-      <span class="link-check"></span>`;
-
-    // 仅已选面板支持点击移除（先取消勾选再移除）
-    if (isRemovable) {
-      row.addEventListener('click', () => {
-        row.classList.remove('selected');
-        removeFromSelectedLink(idx);
-      });
-    }
-
-    container.appendChild(row);
-  });
-}
-
-// 从已选资源中移除链接
-function removeFromSelectedLink(idx) {
-  if (!selectedResources || !selectedResources.links[idx]) return;
-  selectedResources.links.splice(idx, 1);
-  syncSelectedSetFromSelectedResources();
-  renderSelectedResources();
-  updateSelectionCount();
-  updateExportBar();
-  showToast('已移除链接');
-}
-
-// ============ 渲染文本列表 ============
-function renderTexts(data, container, isRemovable = false) {
-  if (!container) return;
-  container.innerHTML = '';
-
-  if (!data || data.length === 0) {
-    container.innerHTML = `<div style="text-align:center;padding:16px;color:var(--text-dim);font-size:11px;">${t('noResources')}</div>`;
-    return;
-  }
-
-  data.forEach((item, idx) => {
-    // 使用内容前 20 字符作为 key，与 syncSelectedSetFromSelectedResources 保持一致
-    const key = 'text_' + (item.content || '').substring(0, 20);
-    const isSel = selected.has(key);
-    const block = document.createElement('div');
-    block.className = 'text-block' + (isSel ? ' selected' : '');
-    block.dataset.index = idx;
-    if (isRemovable) block.style.cursor = 'pointer';
-
-    block.innerHTML = `
-      <div class="text-header">
-        <span style="font-size:12px;color:var(--primary);">${escapeHtml(item.name)}</span>
-        <span style="font-size:11px;color:var(--text-dim);">${item.length} ${t('chars')}</span>
-      </div>
-      <div class="text-content">${escapeHtml(item.content)}</div>`;
-
-    // 仅已选面板支持点击移除（先取消勾选再移除）
-    if (isRemovable) {
-      block.addEventListener('click', () => {
-        block.classList.remove('selected');
-        removeFromSelectedText(idx);
-      });
-    }
-
-    container.appendChild(block);
-  });
-}
-
-// 从已选资源中移除文本
-function removeFromSelectedText(idx) {
-  if (!selectedResources || !selectedResources.texts[idx]) return;
-  selectedResources.texts.splice(idx, 1);
-  syncSelectedSetFromSelectedResources();
-  renderSelectedResources();
-  updateSelectionCount();
-  updateExportBar();
-  showToast('已移除文本');
-}
-
-// 全部取消勾选：清空所有已选资源
-function clearAllSelected() {
-  if (!selectedResources) return;
-  const total = getSelectedTotal();
-  if (total === 0) { showToast('已选资源为空'); return; }
-
-  selectedResources.images = [];
-  selectedResources.videos = [];
-  selectedResources.audios = [];
-  selectedResources.links = [];
-  selectedResources.texts = [];
-
-  syncSelectedSetFromSelectedResources();
-  renderSelectedResources();
-  updateSelectionCount();
-  updateExportBar();
-  showToast(`已清空 ${total} 个已选资源`);
-}
-
-// toggleSelect/updateSelectionVisual 已移除：已选资源通过抓取模式下点击元素提取，不再手动勾选
-
-function updateSelectionCount() {
-  const total = getSelectedTotal();
-  selectedCount.textContent = t('selected') + ': ' + total;
-  if (tabCountSelected) tabCountSelected.textContent = total;
-}
-
-function updateExportBar() {
-  const total = getSelectedTotal();
-  const buttons = document.querySelectorAll('.export-actions button');
-  buttons.forEach(btn => {
-    if (total === 0) {
-      btn.disabled = true;
-      btn.style.opacity = '0.5';
-      btn.style.cursor = 'not-allowed';
-    } else {
-      btn.disabled = false;
-      btn.style.opacity = '1';
-      btn.style.cursor = 'pointer';
-    }
-  });
-}
-
-function renderSelectedResources() {
-  // 直接从 selectedResources 数组渲染（独立于 currentData）
-  if (!selectedResources) selectedResources = createEmptySelectedResources();
-
-  const imgs = selectedResources.images;
-  const vids = selectedResources.videos;
-  const auds = selectedResources.audios;
-  const lnks = selectedResources.links;
-  const txts = selectedResources.texts;
-
-  if (subSelectedImageCount) subSelectedImageCount.textContent = imgs.length;
-  if (subSelectedVideoCount) subSelectedVideoCount.textContent = vids.length;
-  if (subSelectedAudioCount) subSelectedAudioCount.textContent = auds.length;
-  if (subSelectedLinkCount) subSelectedLinkCount.textContent = lnks.length;
-  if (subSelectedTextCount) subSelectedTextCount.textContent = txts.length;
-
-  renderMediaCards(imgs, selectedImageList, 'image', true);
-  renderMediaCards(vids, selectedVideoList, 'video', true);
-  renderMediaCards(auds, selectedAudioList, 'audio', true);
-  renderLinks(lnks, selectedLinkList, true);
-  renderTexts(txts, selectedTextList, true);
-
-  // 更新已选标签页总数
-  const totalCount = imgs.length + vids.length + auds.length + lnks.length + txts.length;
-  if (tabCountSelected) tabCountSelected.textContent = totalCount;
-}
-
-// ============ 进度条 ============
-
-function showProgressBar(data) {
-  if (!progressBarContainer) return;
-
-  progressBarContainer.classList.add('show');
-
-  if (progressPercent) {
-    progressPercent.textContent = data.progress + '%';
-  }
-
-  if (progressBarFill) {
-    progressBarFill.style.width = data.progress + '%';
-  }
-
-  if (progressDetail && data.downloaded !== undefined && data.total !== undefined) {
-    const downloadedMB = (data.downloaded / 1048576).toFixed(1);
-    const totalMB = (data.total / 1048576).toFixed(1);
-    progressDetail.textContent = `${downloadedMB} MB / ${totalMB} MB`;
-  }
-
-  if (progressStatus) {
-    if (data.progress === 100) {
-      progressStatus.textContent = '完成';
-    } else if (data.progress > 0) {
-      progressStatus.textContent = '下载中...';
-    } else {
-      progressStatus.textContent = '准备中...';
-    }
-  }
-
-  if (progressTitle) {
-    progressTitle.textContent = data.progress === 100 ? '下载完成' : '正在下载...';
-  }
-
-  // 自动隐藏（5秒后）
-  if (data.progress === 100) {
-    setTimeout(() => hideProgressBar(), 5000);
-  }
-}
-
-function hideProgressBar() {
-  if (progressBarContainer) {
-    progressBarContainer.classList.remove('show');
-  }
-}
-
-// ============ 导出（只处理已选资源） ============
-
-// 获取安全文件名
-function safeFileName(name) {
-  return (name || 'resource').replace(/[<>:"/\\|?*]/g, '_').substring(0, 100);
-}
-
-// 判断是否为B站视频 URL
-function isBilibiliVideoUrl(url) {
-  if (!url) return false;
-  return url.includes('bilibili.com/video/') || /^BV\w+/.test(url);
-}
-
-// 导出已选资源到文件夹
-// ============ 导出对话框 ============
-
-let exportDialogData = null; // 当前导出对话框数据
-
-// 打开导出对话框（先显示对话框，在对话框内选择目录）
-function exportToFolder() {
-  const total = getSelectedTotal();
-  if (total === 0) { showToast('请先在已选资源中选择内容'); return; }
-
-  // 准备导出文件列表
-  const files = [];
-  
-  // 图片
-  for (const res of (selectedResources.images || [])) {
-    if (!res.url) continue;
-    const baseName = res.pageTitle || res.name || res.url.split('/').pop() || 'image';
-    const name = safeFileName(baseName);
-    files.push({
-      type: 'image',
-      name: name,
-      url: res.url,
-      format: 'jpg',
-      resource: res
-    });
-  }
-
-  // 视频
-  const isBilibiliPage = isBilibiliVideoUrl(currentUrl);
-  for (const res of (selectedResources.videos || [])) {
-    if (!res.url) continue;
-    const baseName = res.pageTitle || res.name || 'video';
-    const name = safeFileName(baseName);
-    files.push({
-      type: 'video',
-      name: name,
-      url: res.url,
-      format: 'mp4',
-      resource: res,
-      isBilibili: isBilibiliPage
-    });
-  }
-
-  // 音频
-  for (const res of (selectedResources.audios || [])) {
-    if (!res.url) continue;
-    const baseName = res.pageTitle || res.name || res.url.split('/').pop() || 'audio';
-    const name = safeFileName(baseName);
-    files.push({
-      type: 'audio',
-      name: name,
-      url: res.url,
-      format: 'mp3',
-      resource: res
-    });
-  }
-
-  // 链接
-  for (const link of (selectedResources.links || [])) {
-    if (!link.url) continue;
-    const baseName = link.pageTitle || link.name || 'link';
-    const name = safeFileName(baseName);
-    files.push({
-      type: 'link',
-      name: name,
-      url: link.url,
-      format: 'txt',
-      resource: link
-    });
-  }
-
-  // 文本
-  for (const txt of (selectedResources.texts || [])) {
-    if (!txt.content) continue;
-    const baseName = txt.pageTitle || txt.name || 'text';
-    const name = safeFileName(baseName);
-    files.push({
-      type: 'text',
-      name: name,
-      content: txt.content,
-      format: 'txt',
-      resource: txt
-    });
-  }
-
-  // 保存导出对话框数据
-  exportDialogData = {
-    dir: null, // 稍后在对话框内选择
-    files: files,
-    selectedFormats: {}
-  };
-
-  // 初始化格式选择
-  files.forEach((f, idx) => {
-    exportDialogData.selectedFormats[idx] = f.format;
-  });
-
-  // 显示导出对话框
-  showExportDialog();
-}
-
-// 显示导出对话框
-async function showExportDialog() {
-  if (!exportDialogData) return;
-
-  // 隐藏 BrowserView，防止遮挡对话框
-  if (window.electronAPI && window.electronAPI.setBrowserviewVisible) {
-    await window.electronAPI.setBrowserviewVisible(false);
-  }
-
-  const overlay = document.getElementById('exportDialogOverlay');
-  const formatOptions = document.getElementById('exportFormatOptions');
-  const fileList = document.getElementById('exportFileList');
-  const startBtn = document.getElementById('startExportBtn');
-
-  // 生成格式选项（按类型分组）
-  const formatGroups = {
-    video: ['mp4', 'webm', 'avi', 'mkv'],
-    audio: ['mp3', 'wav', 'aac', 'flac'],
-    image: ['jpg', 'png', 'webp', 'gif'],
-    text: ['txt', 'pdf', 'docx'],
-    link: ['txt', 'pdf', 'docx']
-  };
-
-  // 获取当前选中的文件类型（去重）
-  const types = [...new Set(exportDialogData.files.map(f => f.type))];
-  
-  // 生成格式按钮
-  formatOptions.innerHTML = '';
-  types.forEach(type => {
-    const formats = formatGroups[type] || ['txt'];
-    const label = document.createElement('div');
-    label.className = 'export-format-label';
-    label.style.marginTop = '12px';
-    label.textContent = getTypeName(type) + '：';
-    formatOptions.appendChild(label);
-
-    const btnGroup = document.createElement('div');
-    btnGroup.className = 'export-format-options';
-    btnGroup.style.marginBottom = '8px';
-    
-    formats.forEach(fmt => {
-      const btn = document.createElement('button');
-      btn.className = 'export-format-btn';
-      btn.textContent = fmt.toUpperCase();
-      btn.dataset.type = type;
-      btn.dataset.format = fmt;
-      btn.onclick = () => selectFormat(type, fmt);
-      btnGroup.appendChild(btn);
-    });
-    
-    formatOptions.appendChild(btnGroup);
-  });
-
-  // 生成文件列表
-  fileList.innerHTML = '';
-  exportDialogData.files.forEach((file, idx) => {
-    const item = document.createElement('div');
-    item.className = 'export-file-item';
-    item.id = `export-file-${idx}`;
-    
-    const header = document.createElement('div');
-    header.className = 'export-file-header';
-    
-    const nameSpan = document.createElement('div');
-    nameSpan.className = 'export-file-name';
-    nameSpan.textContent = `${file.name}.${exportDialogData.selectedFormats[idx]}`;
-    
-    const statusSpan = document.createElement('div');
-    statusSpan.className = 'export-file-status';
-    statusSpan.id = `export-status-${idx}`;
-    statusSpan.textContent = '等待中';
-    
-    header.appendChild(nameSpan);
-    header.appendChild(statusSpan);
-    
-    const progressBar = document.createElement('div');
-    progressBar.className = 'export-progress-bar';
-    
-    const progressFill = document.createElement('div');
-    progressFill.className = 'export-progress-fill';
-    progressFill.id = `export-progress-${idx}`;
-    
-    progressBar.appendChild(progressFill);
-    
-    // 下载量显示区域
-    const downloadInfo = document.createElement('div');
-    downloadInfo.className = 'export-file-download-info';
-    downloadInfo.id = `export-download-info-${idx}`;
-    
-    // 错误信息显示区域
-    const errorSpan = document.createElement('div');
-    errorSpan.className = 'export-file-error';
-    errorSpan.id = `export-error-${idx}`;
-    errorSpan.style.display = 'none';
-    
-    item.appendChild(header);
-    item.appendChild(progressBar);
-    item.appendChild(downloadInfo);
-    item.appendChild(errorSpan);
-    fileList.appendChild(item);
-  });
-
-  // 更新格式按钮选中状态
-  updateFormatButtons();
-
-  // 显示对话框
-  overlay.classList.add('show');
-  startBtn.disabled = false;
-  startBtn.textContent = '开始导出';
-}
-
-// 关闭导出对话框
-async function closeExportDialog() {
-  const overlay = document.getElementById('exportDialogOverlay');
-  overlay.classList.remove('show');
-  exportDialogData = null;
-  
-  // 恢复 BrowserView
-  if (window.electronAPI && window.electronAPI.setBrowserviewVisible) {
-    await window.electronAPI.setBrowserviewVisible(true);
-  }
-}
-
-// 选择格式
-function selectFormat(type, format) {
-  if (!exportDialogData) return;
-  
-  // 更新所有该类型文件的格式
-  exportDialogData.files.forEach((file, idx) => {
-    if (file.type === type) {
-      exportDialogData.selectedFormats[idx] = format;
-    }
-  });
-
-  updateFormatButtons();
-  updateFileNames();
-}
-
-// 更新格式按钮选中状态
-function updateFormatButtons() {
-  if (!exportDialogData) return;
-  
-  const buttons = document.querySelectorAll('.export-format-btn');
-  buttons.forEach(btn => {
-    const type = btn.dataset.type;
-    const format = btn.dataset.format;
-    
-    // 检查该类型是否选择了这个格式
-    const isSelected = exportDialogData.files.some((file, idx) => 
-      file.type === type && exportDialogData.selectedFormats[idx] === format
-    );
-    
-    if (isSelected) {
-      btn.classList.add('selected');
-    } else {
-      btn.classList.remove('selected');
-    }
-  });
-}
-
-// 更新文件名显示
-function updateFileNames() {
-  if (!exportDialogData) return;
-  
-  exportDialogData.files.forEach((file, idx) => {
-    const nameSpan = document.querySelector(`#export-file-${idx} .export-file-name`);
-    if (nameSpan) {
-      nameSpan.textContent = `${file.name}.${exportDialogData.selectedFormats[idx]}`;
-    }
-  });
-}
-
-// 格式化字节数为 MB
-function formatBytes(bytes) {
-  if (bytes === 0 || !bytes) return '0 MB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}
-
-// 获取类型中文名
-function getTypeName(type) {
-  const names = {
-    image: '图片',
-    video: '视频',
-    audio: '音频',
-    link: '链接',
-    text: '文本'
-  };
-  return names[type] || type;
-}
-
-// 获取导出错误消息（友好的中文提示）
-function getExportErrorMessage(error) {
-  if (!error) return '未知错误';
-  
-  const errorMsg = error.message || error.toString();
-  
-  // 网络相关错误
-  if (errorMsg.includes('ENOTFOUND') || errorMsg.includes('getaddrinfo')) {
-    return '无网络连接，请检查网络';
-  }
-  if (errorMsg.includes('ETIMEDOUT') || errorMsg.includes('timeout')) {
-    return '连接超时，请重试';
-  }
-  if (errorMsg.includes('ECONNREFUSED')) {
-    return '连接被拒绝，服务器可能已关闭';
-  }
-  if (errorMsg.includes('ECONNRESET')) {
-    return '连接被重置，请重试';
-  }
-  if (errorMsg.includes('ENETUNREACH')) {
-    return '网络不可达，请检查网络连接';
-  }
-  
-  // HTTP 错误
-  if (errorMsg.includes('HTTP 404') || errorMsg.includes('404')) {
-    return '文件不存在（404）';
-  }
-  if (errorMsg.includes('HTTP 403') || errorMsg.includes('403')) {
-    return '访问被拒绝（403）';
-  }
-  if (errorMsg.includes('HTTP 5')) {
-    return '服务器错误，请稍后重试';
-  }
-  
-  // 文件操作错误
-  if (errorMsg.includes('EPERM') || errorMsg.includes('EACCES')) {
-    return '权限不足，无法写入文件';
-  }
-  if (errorMsg.includes('ENOSPC')) {
-    return '磁盘空间不足';
-  }
-  
-  // 视频处理错误
-  if (errorMsg.includes('视频下载失败')) {
-    return '视频下载失败，可能已被删除或需要登录';
-  }
-  if (errorMsg.includes('下载内容为空')) {
-    return '下载内容为空，请检查网络连接';
-  }
-  
-  // 默认返回原始错误消息（截取前50字符）
-  return errorMsg.substring(0, 50);
-}
-
-// 开始导出
-async function startExport() {
-  if (!exportDialogData) return;
-
-  // 先选择导出目录
-  if (!exportDialogData.dir) {
-    const dir = await window.electronAPI.selectDirectory();
-    if (!dir) {
-      showToast('未选择导出目录');
-      return;
-    }
-    exportDialogData.dir = dir;
-  }
-
-  const startBtn = document.getElementById('startExportBtn');
-  startBtn.disabled = true;
-  startBtn.textContent = '导出中...';
-
-  statusText.textContent = '正在导出已选资源...';
-  let count = 0;
-  let failed = 0;
-
-  // 逐个导出文件
-  for (let idx = 0; idx < exportDialogData.files.length; idx++) {
-    const file = exportDialogData.files[idx];
-    const format = exportDialogData.selectedFormats[idx];
-    const statusSpan = document.getElementById(`export-status-${idx}`);
-    const progressFill = document.getElementById(`export-progress-${idx}`);
-    const errorSpan = document.getElementById(`export-error-${idx}`);
-
-    try {
-      statusSpan.textContent = '导出中...';
-      statusSpan.className = 'export-file-status';
-      if (errorSpan) errorSpan.style.display = 'none';
-      progressFill.style.width = '0%';
-
-      if (file.type === 'image') {
-        await exportImage(file, format, idx);
-      } else if (file.type === 'video') {
-        await exportVideo(file, format, idx);
-      } else if (file.type === 'audio') {
-        await exportAudio(file, format, idx);
-      } else if (file.type === 'link') {
-        await exportLink(file, format, idx);
-      } else if (file.type === 'text') {
-        await exportText(file, format, idx);
-      }
-
-      progressFill.style.width = '100%';
-      statusSpan.textContent = '完成';
-      statusSpan.className = 'export-file-status success';
-      count++;
-    } catch (e) {
-      console.error(`导出失败: ${file.name}`, e);
-      const errorMsg = getExportErrorMessage(e);
-      statusSpan.textContent = '失败';
-      statusSpan.className = 'export-file-status error';
-      if (errorSpan) {
-        errorSpan.textContent = errorMsg;
-        errorSpan.style.display = 'block';
-      }
-      failed++;
-    }
-  }
-
-  statusText.textContent = `导出完成: ${count} 成功, ${failed} 失败`;
-  showToast(`导出完成: ${count} 个文件${failed > 0 ? ', ' + failed + ' 个失败' : ''}`);
-  
-  startBtn.textContent = '导出完成';
-  setTimeout(() => closeExportDialog(), 2000);
-}
-
-// 导出图片
-async function exportImage(file, format, idx) {
-  const progressFill = document.getElementById(`export-progress-${idx}`);
-  const statusSpan = document.getElementById(`export-status-${idx}`);
-  const downloadInfo = document.getElementById(`export-download-info-${idx}`);
-  const destPath = `${exportDialogData.dir}\\${file.name}.${format}`;
-
-  // 下载时间追踪
-  const startTime = Date.now();
-
-  // 监听进度
-  let removeListener = null;
-  const progressHandler = (data) => {
-    if (data && data.fileId === idx && typeof data.progress === 'number') {
-      progressFill.style.width = data.progress + '%';
-      if (data.statusText && statusSpan) {
-        statusSpan.textContent = data.statusText;
-      }
-      if (downloadInfo && data.downloaded !== undefined) {
-        const elapsed = Date.now() - startTime;
-        const elapsedSec = Math.floor(elapsed / 1000);
-        const timeStr = elapsedSec > 0 ? ` | ${elapsedSec}s` : '';
-        downloadInfo.textContent = `${formatBytes(data.downloaded)} / ${formatBytes(data.total)}${timeStr}`;
-      }
-    }
-  };
-
-  if (window.electronAPI && window.electronAPI.onDownloadProgress) {
-    removeListener = window.electronAPI.onDownloadProgress(progressHandler);
-  }
-
-  try {
-    if (statusSpan) statusSpan.textContent = '下载中...';
-    // 图片直接下载
-    await window.electronAPI.downloadFile(file.url, destPath, currentUrl, idx);
-    progressFill.style.width = '100%';
-    if (statusSpan) statusSpan.textContent = '完成';
-  } finally {
-    if (removeListener) removeListener();
-  }
-}
-
-// 导出视频
-async function exportVideo(file, format, idx) {
-  const progressFill = document.getElementById(`export-progress-${idx}`);
-  const statusSpan = document.getElementById(`export-status-${idx}`);
-  const downloadInfo = document.getElementById(`export-download-info-${idx}`);
-  const destPath = `${exportDialogData.dir}\\${file.name}.${format}`;
-
-  // 下载时间追踪
-  const startTime = Date.now();
-  let lastTimeUpdate = 0;
-
-  // 监听进度
-  let removeListener = null;
-  let removeBilibiliListener = null;
-  const progressHandler = (data) => {
-    if (data && data.fileId === idx && typeof data.progress === 'number') {
-      progressFill.style.width = data.progress + '%';
-      if (data.statusText && statusSpan) {
-        statusSpan.textContent = data.statusText;
-      }
-      if (downloadInfo && data.downloaded !== undefined) {
-        const elapsed = Date.now() - startTime;
-        const elapsedSec = Math.floor(elapsed / 1000);
-        const timeStr = elapsedSec > 0 ? ` | ${elapsedSec}s` : '';
-        downloadInfo.textContent = `${formatBytes(data.downloaded)} / ${formatBytes(data.total)}${timeStr}`;
-      }
-    }
-  };
-
-  if (window.electronAPI && window.electronAPI.onDownloadProgress) {
-    removeListener = window.electronAPI.onDownloadProgress(progressHandler);
-  }
-
-  // B站视频下载进度监听（来自主进程转发的 bilibili-download-progress）
-  if (file.isBilibili && window.electronAPI && window.electronAPI.onBilibiliDownloadProgress) {
-    removeBilibiliListener = window.electronAPI.onBilibiliDownloadProgress((data) => {
-      if (data && data.fileId === idx && typeof data.progress === 'number') {
-        progressFill.style.width = data.progress + '%';
-        if (statusSpan) statusSpan.textContent = `下载中 ${data.progress}%`;
-        if (downloadInfo && data.downloaded !== undefined) {
-          const elapsed = Date.now() - startTime;
-          const elapsedSec = Math.floor(elapsed / 1000);
-          const timeStr = elapsedSec > 0 ? ` | ${elapsedSec}s` : '';
-          downloadInfo.textContent = `${formatBytes(data.downloaded)} / ${formatBytes(data.total)}${timeStr}`;
-        }
-      }
-    });
-  }
-
-  try {
-    let result;
-    if (file.resource.localPath) {
-      // 已预处理的本地文件，直接复制
-      if (statusSpan) statusSpan.textContent = '复制文件...';
-      result = await window.electronAPI.copyLocalFile(file.resource.localPath, destPath);
-    } else if (file.isBilibili) {
-      // B站视频
-      if (statusSpan) statusSpan.textContent = '获取视频信息...';
-      result = await window.electronAPI.downloadBilibiliVideo(currentUrl, destPath, currentUrl, idx);
-    } else {
-      // 其他视频
-      if (statusSpan) statusSpan.textContent = '下载中...';
-      result = await window.electronAPI.downloadVideoSmart(file.url, destPath, currentUrl, idx);
-    }
-
-    if (!result.success) {
-      throw new Error(result.error || '视频下载失败');
-    }
-
-    progressFill.style.width = '100%';
-    if (statusSpan) statusSpan.textContent = '完成';
-  } finally {
-    if (removeListener) removeListener();
-    if (removeBilibiliListener) removeBilibiliListener();
-  }
-}
-
-// 导出音频
-async function exportAudio(file, format, idx) {
-  const progressFill = document.getElementById(`export-progress-${idx}`);
-  const statusSpan = document.getElementById(`export-status-${idx}`);
-  const downloadInfo = document.getElementById(`export-download-info-${idx}`);
-  const destPath = `${exportDialogData.dir}\\${file.name}.${format}`;
-
-  // 下载时间追踪
-  const startTime = Date.now();
-
-  // 监听进度
-  let removeListener = null;
-  const progressHandler = (data) => {
-    if (data && data.fileId === idx && typeof data.progress === 'number') {
-      progressFill.style.width = data.progress + '%';
-      if (data.statusText && statusSpan) {
-        statusSpan.textContent = data.statusText;
-      }
-      if (downloadInfo && data.downloaded !== undefined) {
-        const elapsed = Date.now() - startTime;
-        const elapsedSec = Math.floor(elapsed / 1000);
-        const timeStr = elapsedSec > 0 ? ` | ${elapsedSec}s` : '';
-        downloadInfo.textContent = `${formatBytes(data.downloaded)} / ${formatBytes(data.total)}${timeStr}`;
-      }
-    }
-  };
-
-  if (window.electronAPI && window.electronAPI.onDownloadProgress) {
-    removeListener = window.electronAPI.onDownloadProgress(progressHandler);
-  }
-
-  try {
-    if (statusSpan) statusSpan.textContent = '下载中...';
-    // 音频直接下载
-    await window.electronAPI.downloadFile(file.url, destPath, currentUrl, idx);
-    progressFill.style.width = '100%';
-    if (statusSpan) statusSpan.textContent = '完成';
-  } finally {
-    if (removeListener) removeListener();
-  }
-}
-
-// 导出链接
-async function exportLink(file, format, idx) {
-  const progressFill = document.getElementById(`export-progress-${idx}`);
-  const destPath = `${exportDialogData.dir}\\${file.name}.${format}`;
-  
-  if (format === 'txt') {
-    const content = `[InternetShortcut]\nURL=${file.url}\n`;
-    await window.electronAPI.saveTextFile(destPath, content);
-  } else if (format === 'pdf') {
-    await window.electronAPI.saveTextAsPdf(destPath, file.url);
-  } else if (format === 'docx') {
-    await window.electronAPI.saveTextAsDocx(destPath, file.url);
-  }
-  
-  progressFill.style.width = '100%';
-}
-
-// 导出文本
-async function exportText(file, format, idx) {
-  const progressFill = document.getElementById(`export-progress-${idx}`);
-  const destPath = `${exportDialogData.dir}\\${file.name}.${format}`;
-  
-  if (format === 'txt') {
-    await window.electronAPI.saveTextFile(destPath, file.content);
-  } else if (format === 'pdf') {
-    await window.electronAPI.saveTextAsPdf(destPath, file.content);
-  } else if (format === 'docx') {
-    await window.electronAPI.saveTextAsDocx(destPath, file.content);
-  }
-  
-  progressFill.style.width = '100%';
-}
-
-// 下载选中资源（与 exportToFolder 相同，保留兼容）
-async function downloadSelected() {
-  await exportToFolder();
-}
-
-// 导出已选资源为 WSW 文件
-async function exportToWSW() {
-  const total = getSelectedTotal();
-  if (total === 0) { showToast('请先在已选资源中选择内容'); return; }
-  const filePath = await window.electronAPI.selectSaveFile({
-    title: '保存 WSW 文件',
-    defaultPath: (pageTitle.textContent || 'webscout') + '.wsw',
-    filters: [{ name: 'WebShow 文件', extensions: ['wsw'] }]
-  });
-  if (!filePath) return;
-  const wswData = {
-    title: pageTitle.textContent, url: currentUrl,
-    createdAt: new Date().toISOString(),
-    resources: {
-      images: selectedResources.images || [],
-      videos: selectedResources.videos || [],
-      audios: selectedResources.audios || [],
-      links: selectedResources.links || [],
-      texts: selectedResources.texts || []
-    },
-    stats: { total: getSelectedTotal() }
-  };
-  const result = await window.electronAPI.saveWSW(filePath, wswData);
-  if (result.success) showToast('WSW 文件已保存');
-  else showToast('保存失败: ' + result.error);
-}
-
-// 导出已选资源为 Excel 文件
-async function exportToExcel() {
-  const total = getSelectedTotal();
-  if (total === 0) { showToast('请先在已选资源中选择内容'); return; }
-  const filePath = await window.electronAPI.selectSaveFile({
-    title: '保存 Excel 文件',
-    defaultPath: (pageTitle.textContent || 'webscout') + '.xlsx',
-    filters: [{ name: 'Excel 文件', extensions: ['xlsx'] }]
-  });
-  if (!filePath) return;
-  const rows = [];
-  (selectedResources.images || []).forEach(r => rows.push({ 类型: '图片', 名称: r.name, 格式: r.format, URL: r.url }));
-  (selectedResources.videos || []).forEach(r => rows.push({ 类型: '视频', 名称: r.name, 格式: r.format, URL: r.url }));
-  (selectedResources.audios || []).forEach(r => rows.push({ 类型: '音频', 名称: r.name, 格式: r.format, URL: r.url }));
-  (selectedResources.links || []).forEach(r => rows.push({ 类型: '链接', 名称: r.name, 格式: r.format, URL: r.url }));
-  (selectedResources.texts || []).forEach(r => rows.push({ 类型: '文本', 名称: r.name, 内容: (r.content || '').substring(0, 500) }));
-  const result = await window.electronAPI.saveExcel(filePath, rows);
-  if (result.success) showToast('Excel 文件已保存');
-  else showToast('保存失败: ' + result.error);
-}
-
-// ============ 工具函数 ============
-function getExt(url) {
-  try {
-    const u = new URL(url);
-    const name = (u.pathname.split('/').pop() || '').split('?')[0];
-    return name.split('.').pop().toLowerCase();
-  } catch { return ''; }
-}
-
-function getFileName(url) {
-  try {
-    const u = new URL(url);
-    return decodeURIComponent((u.pathname.split('/').pop() || 'resource').split('?')[0]);
-  } catch { return 'resource'; }
-}
-
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
-function showToast(msg) {
-  toast.textContent = msg;
-  toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 2000);
-}
-
-// ============ 初始化 ============
+// 初始化应用
 document.addEventListener('DOMContentLoaded', () => {
-  applyLanguage();
-  loadShowResourceLayerSetting(); // 加载资源层显示设置（默认隐藏）
-  loadThemeSetting(); // 加载主题设置
-  statusText.textContent = t('ready');
-  setupEventListeners();
-  setupUrlInputListener();
-  updateNavButtons();
-
-  // 监听主进程发送的标签创建事件
-  if (window.electronAPI && window.electronAPI.onTabCreated) {
-    window.electronAPI.onTabCreated((data) => {
-      console.log('[TAB] tab-created event:', data);
-      if (data && data.tabId) {
-        onTabCreatedFromMain(data.tabId, data.url, data.title);
-        updateNavButtons();
-      }
-    });
-  }
-
-  // 监听非抓取模式下超链接点击：新建标签页并导航
-  if (window.electronAPI && window.electronAPI.onLinkClicked) {
-    window.electronAPI.onLinkClicked(async (url, fromTabId) => {
-      if (!url) return;
-      console.log('[LINK] non-capture link clicked, opening new tab:', url, 'from tab:', fromTabId);
-      if (window.electronAPI && window.electronAPI.createTab) {
-        const result = await window.electronAPI.createTab(url);
-        if (result && result.tabId) {
-          onTabCreatedFromMain(result.tabId, result.url, url);
-          addToGlobalHistory(url);
-        }
-      }
-    });
-  }
-
-  // 监听右键菜单触发的抓取模式切换：仅更新本地 UI 状态，不反向通知主进程（避免循环）
-  if (window.electronAPI && window.electronAPI.onInspectModeChangedFromMain) {
-    window.electronAPI.onInspectModeChangedFromMain((enabled) => {
-      inspectMode = !!enabled;
-      inspectToggle.classList.toggle('active', inspectMode);
-      console.log('[INSPECT] mode changed from main menu:', inspectMode);
-      // 同步资源面板显示状态：抓取模式开启时展开侧栏，关闭时不自动折叠（用户可手动折叠）
-      if (inspectMode) {
-        if (!sidebarVisible) {
-          sidebarVisible = true;
-          rightPanel.style.display = 'flex';
-          sidebarToggle.textContent = '';
-          if (window.electronAPI && window.electronAPI.setSidebarVisible) {
-            window.electronAPI.setSidebarVisible(true);
-          }
-        }
-      } else {
-        // 关闭抓取模式：不自动折叠侧栏，仅重置抓取资源面板
-        // 只隐藏资源层内容，不隐藏整个 layerPanels
-        const paneResources = document.getElementById('paneResources');
-        if (paneResources) paneResources.style.display = 'none';
-        emptyState.classList.remove('hidden');
-      }
-    });
-  }
-
-  // 通知主进程渲染进程已就绪
-  if (window.electronAPI && window.electronAPI.rendererReady) {
-    window.electronAPI.rendererReady();
-  }
+  App.init();
 });
