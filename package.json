@@ -70,7 +70,9 @@
         }
       ],
       "icon": "assets/icon.png",
-      "artifactName": "${productName}-${version}.${ext}"
+      "artifactName": "${productName}-${version}.${ext}",
+      "maintainer": "HSyilin <HSyilin@users.noreply.github.com>",
+      "category": "Utility"
     },
     "nsis": {
       "oneClick": false,
