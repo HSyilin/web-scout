@@ -969,13 +969,18 @@ function createWindow() {
   ipcMain.handle('list-templates', async () => {
     try {
       const userRoot = getUserTemplatesRoot();
-      // 用户模板根目录不存在时自动创建
-      if (!fs.existsSync(userRoot)) fs.mkdirSync(userRoot, { recursive: true });
+      // 用户模板根目录不存在时自动创建（失败不阻断内置模板读取）
+      if (!fs.existsSync(userRoot)) {
+        try { fs.mkdirSync(userRoot, { recursive: true }); }
+        catch (mkdirErr) { console.warn('user_templates mkdir failed:', mkdirErr.message); }
+      }
 
       const result = {};
       for (const cat of TEMPLATE_CATEGORIES) {
         const builtin = scanTemplateDir(path.join(BUILTIN_TEMPLATES_DIR, cat), cat, 'builtin');
-        const user = scanTemplateDir(path.join(userRoot, cat), cat, 'user');
+        let user = [];
+        try { user = scanTemplateDir(path.join(userRoot, cat), cat, 'user'); }
+        catch (scanErr) { /* 用户目录读取失败时返回空数组 */ }
         result[cat] = { builtin, user };
       }
       return { success: true, data: result };
