@@ -146,6 +146,9 @@ function saveSettings(updates) {
 function getDefaultExportDir() {
   return loadSettings().defaultExportDir || '';
 }
+function getTemplateExportDir() {
+  return loadSettings().templateExportDir || '';
+}
 
 // 读取 AI 工作流任务文件（不存在返回 null）
 function readTaskFile(taskId) {
@@ -5257,6 +5260,25 @@ ipcMain.handle('set-default-export-dir', async (event, dir) => {
       }
     }
     saveSettings({ defaultExportDir: finalDir || '' });
+    return { success: true, data: finalDir || '' };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// ===== 模板/配置导出目录（全局通用，用于保存任务配置文件和模板） =====
+ipcMain.handle('get-template-export-dir', async () => {
+  return { success: true, data: getTemplateExportDir() };
+});
+ipcMain.handle('set-template-export-dir', async (event, dir) => {
+  try {
+    const finalDir = dir && String(dir).trim();
+    if (finalDir) {
+      if (!fs.existsSync(finalDir)) {
+        fs.mkdirSync(finalDir, { recursive: true });
+      }
+    }
+    saveSettings({ templateExportDir: finalDir || '' });
     return { success: true, data: finalDir || '' };
   } catch (e) {
     return { success: false, error: e.message };

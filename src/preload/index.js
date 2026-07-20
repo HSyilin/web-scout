@@ -45,6 +45,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDefaultExportDir: () => ipcRenderer.invoke('get-default-export-dir'),
   setDefaultExportDir: (dir) => ipcRenderer.invoke('set-default-export-dir', dir),
 
+  // 模板/配置导出目录（全局通用，用于保存任务配置文件和模板）
+  getTemplateExportDir: () => ipcRenderer.invoke('get-template-export-dir'),
+  setTemplateExportDir: (dir) => ipcRenderer.invoke('set-template-export-dir', dir),
+
   // 导出任务配置文件（抓取清单，用于快捷导入）
   exportTaskConfig: (task, dir) => ipcRenderer.invoke('export-task-config', { task, dir }),
 

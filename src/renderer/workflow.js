@@ -726,53 +726,75 @@ const Workflow = {
   },
 
   // ===== 默认导出目录（全局通用，所有 AI 工作流任务未设置路径时回退到此目录） =====
+  // 双目录：内容存放目录 + 模板/配置导出目录
   async openDefaultExportDirDialog() {
     // 已存在则聚焦
     const existing = document.getElementById('wfDefaultExportDialog');
     if (existing) { existing.remove(); }
 
-    const cur = await window.electronAPI?.getDefaultExportDir?.();
-    const curDir = cur?.data || '';
+    const [curContent, curTemplate] = await Promise.all([
+      window.electronAPI?.getDefaultExportDir?.(),
+      window.electronAPI?.getTemplateExportDir?.(),
+    ]);
+    const curContentDir = curContent?.data || '';
+    const curTemplateDir = curTemplate?.data || '';
 
     const dlg = document.createElement('div');
     dlg.id = 'wfDefaultExportDialog';
     dlg.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:100000;display:flex;align-items:center;justify-content:center;font-family:inherit;';
     dlg.innerHTML = `
-      <div style="background:var(--bg,#fff);color:var(--text,#222);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,0.25);padding:20px 22px;width:520px;max-width:92vw;">
+      <div style="background:var(--bg,#fff);color:var(--text,#222);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,0.25);padding:20px 22px;width:580px;max-width:92vw;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
           <h3 style="margin:0;font-size:16px;">📁 默认导出目录</h3>
           <button id="wfDefExpClose" style="background:transparent;border:none;font-size:18px;cursor:pointer;color:var(--text2,#888);">✕</button>
         </div>
-        <div style="font-size:12px;color:var(--text2,#888);line-height:1.7;margin-bottom:10px;">
-          此目录为<b>全局通用</b>默认导出路径。AI 工作流任务（批量抓取 / 末端抓取）若勾选「自动导出」但未设置任务级路径，将自动保存到此目录下。
-          <br>所有卡片共用此设置。
+        <div style="font-size:12px;color:var(--text2,#888);line-height:1.7;margin-bottom:14px;">
+          此处为<b>全局通用</b>默认路径，所有卡片共用。任务级临时路径可覆盖。
         </div>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
-          <input type="text" id="wfDefExpPath" value="${this.escapeHtml(curDir)}" placeholder="未设置（点击右侧选择目录）" style="flex:1;padding:8px 10px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);font-size:13px;" readonly />
-          <button id="wfDefExpPick" style="padding:7px 12px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);cursor:pointer;font-size:13px;white-space:nowrap;">📁 选择</button>
-          <button id="wfDefExpOpen" style="padding:7px 12px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);cursor:pointer;font-size:13px;white-space:nowrap;" ${curDir ? '' : 'disabled'}>📂 打开</button>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <button id="wfDefExpClear" style="padding:7px 12px;border:1px solid var(--danger,#e74c3c);border-radius:6px;background:transparent;color:var(--danger,#e74c3c);cursor:pointer;font-size:13px;${curDir ? '' : 'visibility:hidden;'}">❌ 清除默认目录</button>
-          <div style="display:flex;gap:8px;">
-            <button id="wfDefExpCancel" style="padding:7px 16px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);cursor:pointer;font-size:13px;">取消</button>
-            <button id="wfDefExpSave" style="padding:7px 18px;border:none;border-radius:6px;background:var(--primary,#3498db);color:#fff;cursor:pointer;font-size:13px;">💾 保存</button>
+
+        <div style="border:1px solid var(--border,#ddd);border-radius:8px;padding:12px;margin-bottom:12px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">📂 内容存放目录</div>
+          <div style="font-size:11px;color:var(--text2,#888);margin-bottom:8px;">抓取到的资源（图片/视频/文本/音频/链接）默认保存到此目录。AI 工作流任务勾选「自动导出」时使用。</div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="text" id="wfContentPath" value="${this.escapeHtml(curContentDir)}" placeholder="未设置（点击右侧选择目录）" style="flex:1;padding:7px 10px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);font-size:12px;" readonly />
+            <button class="wf-pick-btn" data-target="content" style="padding:7px 10px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);cursor:pointer;font-size:12px;white-space:nowrap;">📁 选择</button>
+            <button class="wf-open-btn" data-target="content" style="padding:7px 10px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);cursor:pointer;font-size:12px;white-space:nowrap;" ${curContentDir ? '' : 'disabled'}>📂 打开</button>
+            <button class="wf-clear-btn" data-target="content" style="padding:7px 10px;border:1px solid var(--danger,#e74c3c);border-radius:6px;background:transparent;color:var(--danger,#e74c3c);cursor:pointer;font-size:12px;${curContentDir ? '' : 'visibility:hidden;'}">❌ 清除</button>
           </div>
+        </div>
+
+        <div style="border:1px solid var(--border,#ddd);border-radius:8px;padding:12px;margin-bottom:14px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">📄 模板/配置导出目录</div>
+          <div style="font-size:11px;color:var(--text2,#888);margin-bottom:8px;">任务配置文件（以任务名称命名的 .json）和另存为的模板文件默认保存到此目录，便于分享和复用抓取方案。</div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="text" id="wfTemplatePath" value="${this.escapeHtml(curTemplateDir)}" placeholder="未设置（点击右侧选择目录）" style="flex:1;padding:7px 10px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);font-size:12px;" readonly />
+            <button class="wf-pick-btn" data-target="template" style="padding:7px 10px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);cursor:pointer;font-size:12px;white-space:nowrap;">📁 选择</button>
+            <button class="wf-open-btn" data-target="template" style="padding:7px 10px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);cursor:pointer;font-size:12px;white-space:nowrap;" ${curTemplateDir ? '' : 'disabled'}>📂 打开</button>
+            <button class="wf-clear-btn" data-target="template" style="padding:7px 10px;border:1px solid var(--danger,#e74c3c);border-radius:6px;background:transparent;color:var(--danger,#e74c3c);cursor:pointer;font-size:12px;${curTemplateDir ? '' : 'visibility:hidden;'}">❌ 清除</button>
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;gap:8px;">
+          <button id="wfDefExpCancel" style="padding:7px 16px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);cursor:pointer;font-size:13px;">取消</button>
+          <button id="wfDefExpSave" style="padding:7px 18px;border:none;border-radius:6px;background:var(--primary,#3498db);color:#fff;cursor:pointer;font-size:13px;">💾 保存</button>
         </div>
       </div>
     `;
     document.body.appendChild(dlg);
 
-    let pendingDir = curDir;
-    const pathInput = dlg.querySelector('#wfDefExpPath');
-    const openBtn = dlg.querySelector('#wfDefExpOpen');
-    const clearBtn = dlg.querySelector('#wfDefExpClear');
-    const saveBtn = dlg.querySelector('#wfDefExpSave');
+    let pendingContent = curContentDir;
+    let pendingTemplate = curTemplateDir;
 
     const close = () => dlg.remove();
-    const refreshPathUI = () => {
-      pathInput.value = pendingDir || '';
-      if (pendingDir) {
+
+    const refreshUI = (target) => {
+      const val = target === 'content' ? pendingContent : pendingTemplate;
+      const inputId = target === 'content' ? '#wfContentPath' : '#wfTemplatePath';
+      const input = dlg.querySelector(inputId);
+      const openBtn = dlg.querySelector(`.wf-open-btn[data-target="${target}"]`);
+      const clearBtn = dlg.querySelector(`.wf-clear-btn[data-target="${target}"]`);
+      input.value = val || '';
+      if (val) {
         openBtn.removeAttribute('disabled');
         clearBtn.style.visibility = 'visible';
       } else {
@@ -785,38 +807,59 @@ const Workflow = {
     dlg.querySelector('#wfDefExpCancel').onclick = close;
     dlg.onclick = (e) => { if (e.target === dlg) close(); };
 
-    dlg.querySelector('#wfDefExpPick').onclick = async () => {
-      const result = await window.electronAPI?.selectDirectory?.();
-      if (result?.success && result.data) {
-        pendingDir = result.data;
-        refreshPathUI();
-      }
-    };
+    // 选择目录
+    dlg.querySelectorAll('.wf-pick-btn').forEach(btn => {
+      btn.onclick = async () => {
+        const target = btn.dataset.target;
+        const result = await window.electronAPI?.selectDirectory?.();
+        if (result?.success && result.data) {
+          if (target === 'content') pendingContent = result.data;
+          else pendingTemplate = result.data;
+          refreshUI(target);
+        }
+      };
+    });
 
-    openBtn.onclick = async () => {
-      if (!pendingDir) return;
-      const result = await window.electronAPI?.openInExplorer?.(pendingDir);
-      if (!result?.success) App.showToast('打开失败：' + (result?.error || '目录不存在'));
-    };
+    // 打开目录
+    dlg.querySelectorAll('.wf-open-btn').forEach(btn => {
+      btn.onclick = async () => {
+        const target = btn.dataset.target;
+        const val = target === 'content' ? pendingContent : pendingTemplate;
+        if (!val) return;
+        const result = await window.electronAPI?.openInExplorer?.(val);
+        if (!result?.success) App.showToast('打开失败：' + (result?.error || '目录不存在'));
+      };
+    });
 
-    clearBtn.onclick = async () => {
-      const result = await window.electronAPI?.setDefaultExportDir?.('');
-      if (result?.success) {
-        pendingDir = '';
-        refreshPathUI();
-        App.showToast('✓ 已清除默认导出目录');
-      } else {
-        App.showToast('清除失败：' + (result?.error || '未知错误'));
-      }
-    };
+    // 清除目录（仅前端临时状态，保存时统一提交）
+    dlg.querySelectorAll('.wf-clear-btn').forEach(btn => {
+      btn.onclick = () => {
+        const target = btn.dataset.target;
+        if (target === 'content') pendingContent = '';
+        else pendingTemplate = '';
+        refreshUI(target);
+      };
+    });
 
-    saveBtn.onclick = async () => {
-      const result = await window.electronAPI?.setDefaultExportDir?.(pendingDir || '');
-      if (result?.success) {
-        App.showToast(pendingDir ? '✓ 默认导出目录已保存：' + pendingDir : '✓ 已清除默认导出目录');
-        close();
-      } else {
-        App.showToast('保存失败：' + (result?.error || '未知错误'));
+    // 保存（同时提交两个目录）
+    dlg.querySelector('#wfDefExpSave').onclick = async () => {
+      try {
+        const [r1, r2] = await Promise.all([
+          window.electronAPI?.setDefaultExportDir?.(pendingContent || ''),
+          window.electronAPI?.setTemplateExportDir?.(pendingTemplate || ''),
+        ]);
+        const ok1 = r1?.success;
+        const ok2 = r2?.success;
+        if (ok1 && ok2) {
+          App.showToast('✓ 默认导出目录已保存');
+          close();
+        } else if (ok1 || ok2) {
+          App.showToast('⚠ 部分保存成功（内容：' + (ok1 ? '✓' : '✗') + ' / 模板：' + (ok2 ? '✓' : '✗') + '）');
+        } else {
+          App.showToast('保存失败');
+        }
+      } catch (e) {
+        App.showToast('保存异常：' + (e.message || e));
       }
     };
   },

@@ -382,6 +382,7 @@ const AIWorkflow = {
     if (wiz.step === 1) {
       body.innerHTML = `
         <div class="aiworkflow-form-group">
+          <button class="task-action-btn" onclick="AIWorkflow.openTemplatePicker()" style="white-space:nowrap;margin-bottom:14px;">📂 导入抓取方案模板</button>
           <label>目标页面 URL</label>
           <div style="display:flex;gap:8px;">
             <input type="text" id="wizardUrlInput" placeholder="https://example.com/page" value="${this.escapeHtml(wiz.data.url)}" style="flex:1;" />
@@ -559,7 +560,10 @@ const AIWorkflow = {
         </div>
         <div style="display:flex;justify-content:space-between;margin-top:18px;">
           <button class="task-action-btn" onclick="AIWorkflow.wizardPrev()">← 上一步</button>
-          <button class="task-action-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="AIWorkflow.saveTask()">💾 保存任务</button>
+          <div style="display:flex;gap:8px;">
+            <button class="task-action-btn" onclick="AIWorkflow.saveAsTemplate()">💾 另存为模板</button>
+            <button class="task-action-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="AIWorkflow.saveTask()">💾 保存任务</button>
+          </div>
         </div>
       `;
       // 问题2：数据源切换事件
@@ -613,6 +617,7 @@ const AIWorkflow = {
     if (wiz.step === 1) {
       body.innerHTML = `
         <div class="aiworkflow-form-group">
+          <button class="task-action-btn" onclick="AIWorkflow.openTemplatePicker()" style="white-space:nowrap;margin-bottom:14px;">📂 导入抓取方案模板</button>
           <label>目标页面 URL（每行一个）</label>
           <textarea id="wizardUrlsInput" rows="6" placeholder="https://example.com/page1&#10;https://example.com/page2" style="width:100%;font-family:inherit;resize:vertical;box-sizing:border-box;">${this.escapeHtml(wiz.data.urls || '')}</textarea>
           <div style="margin-top:6px;">
@@ -678,7 +683,10 @@ const AIWorkflow = {
         </div>
         <div style="display:flex;justify-content:space-between;margin-top:18px;">
           <button class="task-action-btn" onclick="AIWorkflow.wizardPrev()">← 上一步</button>
-          <button class="task-action-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="AIWorkflow.saveTask()">💾 保存任务</button>
+          <div style="display:flex;gap:8px;">
+            <button class="task-action-btn" onclick="AIWorkflow.saveAsTemplate()">💾 另存为模板</button>
+            <button class="task-action-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="AIWorkflow.saveTask()">💾 保存任务</button>
+          </div>
         </div>
       `;
       document.getElementById('wizardNameInput').addEventListener('input', (e) => { wiz.data.name = e.target.value; });
@@ -689,6 +697,7 @@ const AIWorkflow = {
     if (wiz.step === 1) {
       body.innerHTML = `
         <div class="aiworkflow-form-group">
+          <button class="task-action-btn" onclick="AIWorkflow.openTemplatePicker()" style="white-space:nowrap;margin-bottom:14px;">📂 导入抓取方案模板</button>
           <label>目标页面 URL</label>
           <div style="display:flex;gap:8px;">
             <input type="text" id="wizardUrlInput" placeholder="https://example.com/page" value="${this.escapeHtml(wiz.data.url || '')}" style="flex:1;" />
@@ -762,7 +771,10 @@ const AIWorkflow = {
         </div>
         <div style="display:flex;justify-content:space-between;margin-top:18px;">
           <button class="task-action-btn" onclick="AIWorkflow.wizardPrev()">← 上一步</button>
-          <button class="task-action-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="AIWorkflow.saveTask()">💾 保存任务</button>
+          <div style="display:flex;gap:8px;">
+            <button class="task-action-btn" onclick="AIWorkflow.saveAsTemplate()">💾 另存为模板</button>
+            <button class="task-action-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="AIWorkflow.saveTask()">💾 保存任务</button>
+          </div>
         </div>
       `;
       document.getElementById('wizardNameInput').addEventListener('input', (e) => { wiz.data.name = e.target.value; });
@@ -898,9 +910,8 @@ const AIWorkflow = {
             ${effectivePath ? `<button class="task-action-btn" onclick="AIWorkflow.openExportFolder()">📂 打开</button>` : ''}
           </div>
           <div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.7;">
-            💡 此目录用于保存以下两类内容（<b>必选</b>）：
-            <br>　1. <b>任务配置文件</b>（以任务名称命名，如「${this.escapeHtml(wiz.data.name || '任务名')}.json」，可分享给其他用户快捷导入抓取方案）
-            <br>　2. <b>抓取内容</b>（仅当勾选下方「自动导出」时，按「页面标题\资源类型」分类保存）
+            💡 此目录用于保存<b>抓取内容</b>（<b>必选</b>，仅当勾选下方「自动导出」时按「页面标题\资源类型」分类保存）。
+            <br>💡 <b>任务配置文件</b>（以任务名称命名，如「${this.escapeHtml(wiz.data.name || '任务名')}.json」）会优先保存到<b>模板/配置导出目录</b>，未设置时回退到此目录。可在「抓取信息卡片」顶部 📁 按钮统一设置。
             <br>💡 未选择目录时自动使用<b>全局默认导出目录</b>${wiz.data._defaultExportDir ? '（当前默认：<b>' + this.escapeHtml(wiz.data._defaultExportDir) + '</b>）' : '（未设置，可在「抓取信息卡片」顶部 📁 按钮设置）'}
             <br>💡 点击「📁 选择目录」可设置<b>仅本任务</b>使用的临时路径，覆盖默认目录；点击「↩ 使用默认」回退到全局默认。
           </div>
@@ -1531,9 +1542,15 @@ const AIWorkflow = {
           ? { id: newId, type: taskType, name: (updates && updates.name) || d.name.trim(), config: (updates && updates.config) || {} }
           : task;
 
-        // 导出任务配置文件（以任务名称命名，保存到 effectivePath）
+        // 导出任务配置文件（以任务名称命名）
+        // 优先使用模板/配置导出目录，回退到 effectivePath（内容存放目录）
         try {
-          const exportResult = await window.electronAPI?.exportTaskConfig?.(taskForExport, effectivePath);
+          let configExportDir = effectivePath;
+          try {
+            const tplDirRes = await window.electronAPI?.getTemplateExportDir?.();
+            if (tplDirRes?.success && tplDirRes.data) configExportDir = tplDirRes.data;
+          } catch (_) { /* 回退到 effectivePath */ }
+          const exportResult = await window.electronAPI?.exportTaskConfig?.(taskForExport, configExportDir);
           if (exportResult?.success) {
             this.showToast(isEditing ? '✓ 任务已更新，配置已导出' : '✓ 任务已保存，配置已导出');
             console.log('[AIWorkflow] 配置文件已导出:', exportResult.path);
@@ -1805,11 +1822,35 @@ const AIWorkflow = {
           const taskConfig = res.data || {};
           const cfg = (taskConfig.task && taskConfig.task.config) || {};
           if (taskConfig.task && taskConfig.task.name) wiz.data.name = taskConfig.task.name;
-          if (Array.isArray(cfg.sampleUrls)) wiz.data.sampleUrls = cfg.sampleUrls.join('\n');
-          if (Array.isArray(cfg.fields)) wiz.data.fields = cfg.fields;
-          if (Array.isArray(cfg.urls)) wiz.data.urls = cfg.urls.join('\n');
-          if (cfg.exportFormat) wiz.data.exportFormat = cfg.exportFormat;
-          if (typeof cfg.autoExport !== 'undefined') wiz.data.autoExport = cfg.autoExport;
+          // 按当前任务类型分发字段映射
+          if (wiz.type === 'template') {
+            // 末端抓取：sampleUrls + fields + urls
+            if (Array.isArray(cfg.sampleUrls)) wiz.data.sampleUrls = cfg.sampleUrls.join('\n');
+            if (Array.isArray(cfg.fields)) wiz.data.fields = cfg.fields;
+            if (Array.isArray(cfg.urls)) wiz.data.urls = cfg.urls.join('\n');
+            if (cfg.exportFormat) wiz.data.exportFormat = cfg.exportFormat;
+            if (typeof cfg.autoExport !== 'undefined') wiz.data.autoExport = cfg.autoExport;
+          } else if (wiz.type === 'crosspage') {
+            // 跨页面抓取：urls + selector + fieldMappings
+            if (Array.isArray(cfg.urls)) wiz.data.urls = cfg.urls.join('\n');
+            if (typeof cfg.selector === 'string') wiz.data.selector = cfg.selector;
+            if (Array.isArray(cfg.fieldMappings)) wiz.data.fieldMappings = cfg.fieldMappings;
+          } else if (wiz.type === 'batch') {
+            // 批量抓取：url + selector + classifyBy + matchMode
+            if (typeof cfg.url === 'string') wiz.data.url = cfg.url;
+            if (typeof cfg.selector === 'string') wiz.data.selector = cfg.selector;
+            if (typeof cfg.classifyBy === 'string') wiz.data.classifyBy = cfg.classifyBy;
+            if (typeof cfg.matchMode === 'string') wiz.data.matchMode = cfg.matchMode;
+            if (cfg.matchLimit) wiz.data.matchLimit = cfg.matchLimit;
+            if (cfg.exportFormat) wiz.data.exportFormat = cfg.exportFormat;
+            if (typeof cfg.autoExport !== 'undefined') wiz.data.autoExport = cfg.autoExport;
+          } else if (wiz.type === 'tracking') {
+            // 更新追踪：url + selector + intervalMinutes
+            if (typeof cfg.url === 'string') wiz.data.url = cfg.url;
+            if (typeof cfg.selector === 'string') wiz.data.selector = cfg.selector;
+            if (typeof cfg.idField === 'string') wiz.data.idField = cfg.idField;
+            if (cfg.intervalMinutes) wiz.data.intervalMinutes = cfg.intervalMinutes;
+          }
           // 不覆盖 wiz.data.exportPath 和 wiz.data._defaultExportDir（保留用户已选路径）
           this.showToast('✓ 已导入模板：' + (taskConfig.task?.name || file));
           close();
@@ -1903,17 +1944,49 @@ const AIWorkflow = {
         task: {
           type: wiz.type,
           name: name,
-          config: {
-            sampleUrls: (wiz.data.sampleUrls || '').split('\n').map(s => s.trim()).filter(Boolean),
-            fields: wiz.data.fields || [],
-            urls: (wiz.data.urls || '').split('\n').map(s => s.trim()).filter(Boolean),
-            sourceTaskId: wiz.data.sourceTaskId || '',
-            targetSourceTaskId: wiz.data.targetSourceTaskId || '',
-            sourceField: wiz.data.sourceField || 'url',
-            autoExport: wiz.data.autoExport || false,
-            exportFormat: wiz.data.exportFormat || 'json',
-            exportPath: wiz.data.exportPath || '',
-          }
+          config: (() => {
+            // 按任务类型构造 config
+            if (wiz.type === 'template') {
+              return {
+                sampleUrls: (wiz.data.sampleUrls || '').split('\n').map(s => s.trim()).filter(Boolean),
+                fields: wiz.data.fields || [],
+                urls: (wiz.data.urls || '').split('\n').map(s => s.trim()).filter(Boolean),
+                sourceTaskId: wiz.data.sourceTaskId || '',
+                targetSourceTaskId: wiz.data.targetSourceTaskId || '',
+                sourceField: wiz.data.sourceField || 'url',
+                autoExport: wiz.data.autoExport || false,
+                exportFormat: wiz.data.exportFormat || 'json',
+                exportPath: wiz.data.exportPath || '',
+              };
+            } else if (wiz.type === 'crosspage') {
+              return {
+                urls: (wiz.data.urls || '').split('\n').map(s => s.trim()).filter(Boolean),
+                selector: wiz.data.selector || '',
+                fieldMappings: Array.isArray(wiz.data.fieldMappings) ? wiz.data.fieldMappings : [],
+                sourceTaskId: wiz.data.sourceTaskId || '',
+                sourceField: wiz.data.sourceField || 'href',
+              };
+            } else if (wiz.type === 'batch') {
+              return {
+                url: wiz.data.url || '',
+                selector: wiz.data.selector || '',
+                classifyBy: wiz.data.classifyBy || '',
+                matchMode: wiz.data.matchMode || 'all',
+                matchLimit: wiz.data.matchLimit ? Number(wiz.data.matchLimit) : null,
+                autoExport: wiz.data.autoExport || false,
+                exportFormat: wiz.data.exportFormat || 'json',
+                exportPath: wiz.data.exportPath || '',
+              };
+            } else if (wiz.type === 'tracking') {
+              return {
+                url: wiz.data.url || '',
+                selector: wiz.data.selector || '',
+                idField: wiz.data.idField || 'href',
+                intervalMinutes: Number(wiz.data.intervalMinutes) || 30,
+              };
+            }
+            return {};
+          })()
         }
       };
       try {
@@ -1945,6 +2018,309 @@ const AIWorkflow = {
         if (e.key === 'Escape') { e.preventDefault(); close(); }
       });
     }
+  },
+
+  // ===== 模板管理（独立对话框：列表/预览/导入到新任务/导出/删除） =====
+  async openTemplateManager() {
+    let templateData = null;
+    try {
+      const result = await window.electronAPI?.listTemplates?.();
+      if (!result?.success) {
+        this.showToast('加载模板列表失败：' + (result?.error || '未知错误'));
+        return;
+      }
+      templateData = result.data || {};
+    } catch (e) {
+      this.showToast('加载模板列表失败：' + (e.message || e));
+      return;
+    }
+
+    // 已存在则移除
+    const existing = document.getElementById('aiworkflowTemplateManagerModal');
+    if (existing) existing.remove();
+
+    const CATEGORY_LABELS = {
+      recruitment: '招聘',
+      comments: '评论',
+      products: '商品',
+    };
+    const categories = Object.keys(CATEGORY_LABELS);
+    let activeCat = categories[0];
+
+    const dlg = document.createElement('div');
+    dlg.id = 'aiworkflowTemplateManagerModal';
+    dlg.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:100000;display:flex;align-items:center;justify-content:center;font-family:inherit;';
+    dlg.innerHTML = `
+      <div style="background:var(--bg,#fff);color:var(--text,#222);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,0.25);padding:20px 22px;width:680px;max-width:92vw;max-height:85vh;display:flex;flex-direction:column;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <h3 style="margin:0;font-size:16px;">📚 模板管理</h3>
+          <button id="tplMgrClose" style="background:transparent;border:none;font-size:18px;cursor:pointer;color:var(--text2,#888);">✕</button>
+        </div>
+        <div style="font-size:12px;color:var(--text2,#888);line-height:1.6;margin-bottom:12px;">
+          管理所有抓取方案模板：预览字段 / 导入到新任务 / 导出到文件 / 删除（仅自定义）。
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:12px;border-bottom:1px solid var(--border,#ddd);">
+          ${categories.map(c => `<button class="tpl-mgr-tab-btn" data-cat="${c}" style="padding:8px 14px;background:transparent;border:none;border-bottom:2px solid transparent;cursor:pointer;font-size:13px;color:var(--text2,#888);">${CATEGORY_LABELS[c]}</button>`).join('')}
+        </div>
+        <div id="tplMgrBody" style="flex:1;overflow-y:auto;min-height:200px;"></div>
+        <div style="display:flex;justify-content:flex-end;margin-top:14px;">
+          <button id="tplMgrCancel" style="padding:7px 16px;border:1px solid var(--border,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--text,#222);cursor:pointer;font-size:13px;">关闭</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(dlg);
+
+    const bodyEl = dlg.querySelector('#tplMgrBody');
+    const close = () => dlg.remove();
+
+    const renderEmpty = (msg) => `<div style="color:var(--text2,#888);font-size:12px;padding:20px;text-align:center;">${msg}</div>`;
+
+    // 单条模板行：含 预览/导入到新任务/导出/删除（仅 user）四个按钮
+    const renderTemplateRow = (t, source, category) => {
+      const typeLabel = { template: '末端抓取', crosspage: '跨页抓取', batch: '批量抓取', tracking: '更新追踪' }[t.taskType] || t.taskType || '';
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid var(--border,#ddd);border-radius:6px;margin-bottom:8px;background:var(--bg,#fff);">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;word-break:break-all;">${this.escapeHtml(t.name)} ${typeLabel ? `<span style="font-size:11px;color:var(--text2,#888);font-weight:normal;">[${typeLabel}]</span>` : ''}</div>
+            <div style="font-size:11px;color:var(--text2,#888);margin-top:2px;">来源：${source === 'user' ? '⭐ 我的' : '🏠 内置'}${t.exportedAt ? ' · ' + t.exportedAt.slice(0,10) : ''}</div>
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            <button class="task-action-btn tpl-mgr-preview-btn" data-source="${source}" data-category="${category}" data-file="${this.escapeHtml(t.file)}" style="padding:4px 10px;font-size:12px;">👁 预览</button>
+            <button class="task-action-btn tpl-mgr-newtask-btn" data-source="${source}" data-category="${category}" data-file="${this.escapeHtml(t.file)}" data-task-type="${this.escapeHtml(t.taskType)}" style="padding:4px 10px;font-size:12px;">📥 导入到新任务</button>
+            <button class="task-action-btn tpl-mgr-export-btn" data-source="${source}" data-category="${category}" data-file="${this.escapeHtml(t.file)}" style="padding:4px 10px;font-size:12px;">📤 导出</button>
+            ${source === 'user' ? `<button class="task-action-btn tpl-mgr-delete-btn" data-category="${category}" data-file="${this.escapeHtml(t.file)}" style="padding:4px 8px;font-size:12px;color:var(--danger,#e74c3c);background:transparent;border:1px solid var(--danger,#e74c3c);">🗑 删除</button>` : ''}
+          </div>
+        </div>
+      `;
+    };
+
+    const renderCatBody = () => {
+      const cat = activeCat;
+      const catData = templateData[cat] || { builtin: [], user: [] };
+      // 任务类型归一化（兼容旧模板没有 taskType 字段）
+      const normalize = (list) => (list || []).map(t => ({
+        ...t,
+        taskType: t.taskType || (t.config && t.config.task && t.config.task.type) || 'template',
+        exportedAt: t.exportedAt || (t.config && t.config.exportedAt) || '',
+      }));
+      const builtin = normalize(catData.builtin);
+      const user = normalize(catData.user);
+      bodyEl.innerHTML = `
+        <div style="margin-bottom:14px;">
+          <div style="font-size:12px;font-weight:600;color:var(--text,#222);margin-bottom:6px;">🏠 内置模板（${builtin.length}）</div>
+          <div>${builtin.length ? builtin.map(t => renderTemplateRow(t, 'builtin', cat)).join('') : renderEmpty('（暂无内置模板）')}</div>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--text,#222);margin-bottom:6px;">⭐ 我的模板（${user.length}）</div>
+          <div>${user.length ? user.map(t => renderTemplateRow(t, 'user', cat)).join('') : renderEmpty('（暂无自定义模板，可在任务向导最后一步点击「💾 另存为模板」创建）')}</div>
+        </div>
+      `;
+    };
+
+    const refreshAll = async () => {
+      try {
+        const result = await window.electronAPI?.listTemplates?.();
+        if (result?.success) templateData = result.data || {};
+      } catch (e) { /* ignore */ }
+      renderCatBody();
+    };
+
+    renderCatBody();
+
+    // 标签切换
+    dlg.querySelectorAll('.tpl-mgr-tab-btn').forEach(btn => {
+      btn.onclick = () => {
+        activeCat = btn.dataset.cat;
+        dlg.querySelectorAll('.tpl-mgr-tab-btn').forEach(b => {
+          b.style.borderBottom = '2px solid transparent';
+          b.style.color = 'var(--text2,#888)';
+        });
+        btn.style.borderBottom = '2px solid var(--primary,#3498db)';
+        btn.style.color = 'var(--primary,#3498db)';
+        renderCatBody();
+      };
+    });
+    const firstTab = dlg.querySelector('.tpl-mgr-tab-btn');
+    if (firstTab) {
+      firstTab.style.borderBottom = '2px solid var(--primary,#3498db)';
+      firstTab.style.color = 'var(--primary,#3498db)';
+    }
+
+    dlg.querySelector('#tplMgrClose').onclick = close;
+    dlg.querySelector('#tplMgrCancel').onclick = close;
+    dlg.onclick = (e) => { if (e.target === dlg) close(); };
+
+    // 事件代理：预览/导入到新任务/导出/删除
+    bodyEl.addEventListener('click', async (e) => {
+      const previewBtn = e.target.closest('.tpl-mgr-preview-btn');
+      const newTaskBtn = e.target.closest('.tpl-mgr-newtask-btn');
+      const exportBtn = e.target.closest('.tpl-mgr-export-btn');
+      const deleteBtn = e.target.closest('.tpl-mgr-delete-btn');
+
+      if (previewBtn) {
+        const { source, category, file } = previewBtn.dataset;
+        try {
+          const res = await window.electronAPI?.importTaskTemplate?.(source, category, file);
+          if (!res?.success) { this.showToast('预览失败：' + (res?.error || '未知错误')); return; }
+          this._showTemplatePreview(res.data, file);
+        } catch (err) { this.showToast('预览异常：' + (err.message || err)); }
+      } else if (newTaskBtn) {
+        const { source, category, file, taskType } = newTaskBtn.dataset;
+        // 关闭模板管理对话框，打开对应类型的新任务向导，然后自动导入模板
+        close();
+        const type = taskType || 'template';
+        // 切换到对应 tab
+        this.switchTab(type);
+        // 打开新建向导
+        this.openCreateWizard(type);
+        // 等待向导 DOM 就绪后导入模板
+        setTimeout(async () => {
+          try {
+            const res = await window.electronAPI?.importTaskTemplate?.(source, category, file);
+            if (!res?.success) { this.showToast('导入失败：' + (res?.error || '未知错误')); return; }
+            const wiz = this.state.currentWizard;
+            if (!wiz) return;
+            const taskConfig = res.data || {};
+            const cfg = (taskConfig.task && taskConfig.task.config) || {};
+            if (taskConfig.task && taskConfig.task.name) wiz.data.name = taskConfig.task.name;
+            // 复用 openTemplatePicker 中的分发逻辑
+            if (type === 'template') {
+              if (Array.isArray(cfg.sampleUrls)) wiz.data.sampleUrls = cfg.sampleUrls.join('\n');
+              if (Array.isArray(cfg.fields)) wiz.data.fields = cfg.fields;
+              if (Array.isArray(cfg.urls)) wiz.data.urls = cfg.urls.join('\n');
+              if (cfg.exportFormat) wiz.data.exportFormat = cfg.exportFormat;
+              if (typeof cfg.autoExport !== 'undefined') wiz.data.autoExport = cfg.autoExport;
+            } else if (type === 'crosspage') {
+              if (Array.isArray(cfg.urls)) wiz.data.urls = cfg.urls.join('\n');
+              if (typeof cfg.selector === 'string') wiz.data.selector = cfg.selector;
+              if (Array.isArray(cfg.fieldMappings)) wiz.data.fieldMappings = cfg.fieldMappings;
+            } else if (type === 'batch') {
+              if (typeof cfg.url === 'string') wiz.data.url = cfg.url;
+              if (typeof cfg.selector === 'string') wiz.data.selector = cfg.selector;
+              if (typeof cfg.classifyBy === 'string') wiz.data.classifyBy = cfg.classifyBy;
+              if (typeof cfg.matchMode === 'string') wiz.data.matchMode = cfg.matchMode;
+              if (cfg.matchLimit) wiz.data.matchLimit = cfg.matchLimit;
+              if (cfg.exportFormat) wiz.data.exportFormat = cfg.exportFormat;
+              if (typeof cfg.autoExport !== 'undefined') wiz.data.autoExport = cfg.autoExport;
+            } else if (type === 'tracking') {
+              if (typeof cfg.url === 'string') wiz.data.url = cfg.url;
+              if (typeof cfg.selector === 'string') wiz.data.selector = cfg.selector;
+              if (typeof cfg.idField === 'string') wiz.data.idField = cfg.idField;
+              if (cfg.intervalMinutes) wiz.data.intervalMinutes = cfg.intervalMinutes;
+            }
+            this.showToast('✓ 已从模板加载：' + (taskConfig.task?.name || file));
+            this.renderWizardStep();
+          } catch (err) { this.showToast('导入异常：' + (err.message || err)); }
+        }, 80);
+      } else if (exportBtn) {
+        const { source, category, file } = exportBtn.dataset;
+        try {
+          const res = await window.electronAPI?.importTaskTemplate?.(source, category, file);
+          if (!res?.success) { this.showToast('读取模板失败：' + (res?.error || '未知错误')); return; }
+          // 选择目录（导出会以 task.name.json 命名）
+          const dirRes = await window.electronAPI?.selectDirectory?.();
+          if (!dirRes?.success || !dirRes.data) return; // 用户取消
+          const exportRes = await window.electronAPI?.exportTaskConfig?.(res.data.task, dirRes.data);
+          if (exportRes?.success) {
+            this.showToast('✓ 已导出到：' + exportRes.path);
+          } else {
+            this.showToast('导出失败：' + (exportRes?.error || '未知错误'));
+          }
+        } catch (err) { this.showToast('导出异常：' + (err.message || err)); }
+      } else if (deleteBtn) {
+        const { category, file } = deleteBtn.dataset;
+        if (!confirm(`确定删除模板 [${file}]？此操作不可撤销。`)) return;
+        try {
+          const res = await window.electronAPI?.deleteUserTemplate?.(category, file);
+          if (!res?.success) { this.showToast('删除失败：' + (res?.error || '未知错误')); return; }
+          this.showToast('✓ 已删除模板');
+          await refreshAll();
+        } catch (err) { this.showToast('删除异常：' + (err.message || err)); }
+      }
+    });
+  },
+
+  // 模板预览子对话框
+  _showTemplatePreview(taskConfig, fileLabel) {
+    const existing = document.getElementById('aiworkflowTemplatePreviewModal');
+    if (existing) existing.remove();
+    const task = taskConfig?.task || {};
+    const cfg = task.config || {};
+    const typeLabel = { template: '末端抓取', crosspage: '跨页抓取', batch: '批量抓取', tracking: '更新追踪' }[task.type] || task.type || '';
+
+    // 字段表渲染（template / crosspage 有 fields 或 fieldMappings）
+    let fieldsHtml = '';
+    const fields = cfg.fields || cfg.fieldMappings || [];
+    if (Array.isArray(fields) && fields.length) {
+      fieldsHtml = `
+        <div style="margin-top:10px;">
+          <div style="font-size:12px;font-weight:600;margin-bottom:6px;">字段（${fields.length}）</div>
+          <div style="border:1px solid var(--border,#ddd);border-radius:6px;overflow:hidden;">
+            <table style="width:100%;border-collapse:collapse;font-size:11px;">
+              <thead>
+                <tr style="background:var(--bg2,#f5f5f5);">
+                  <th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--border,#ddd);">字段名</th>
+                  <th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--border,#ddd);">selector</th>
+                  <th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--border,#ddd);">attr</th>
+                  <th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--border,#ddd);">extractType</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${fields.map(f => `
+                  <tr>
+                    <td style="padding:6px 8px;border-bottom:1px solid var(--border,#eee);">${this.escapeHtml(f.name || '')}</td>
+                    <td style="padding:6px 8px;border-bottom:1px solid var(--border,#eee);font-family:monospace;word-break:break-all;">${this.escapeHtml(f.selector || '')}</td>
+                    <td style="padding:6px 8px;border-bottom:1px solid var(--border,#eee);">${this.escapeHtml(f.attr || '')}</td>
+                    <td style="padding:6px 8px;border-bottom:1px solid var(--border,#eee);">${this.escapeHtml(f.extractType || '')}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    // URL 列表
+    let urlsHtml = '';
+    const urls = cfg.urls || (cfg.url ? [cfg.url] : []) || [];
+    const sampleUrls = cfg.sampleUrls || [];
+    if (sampleUrls.length) {
+      urlsHtml += `<div style="margin-top:10px;"><div style="font-size:12px;font-weight:600;margin-bottom:4px;">样本 URL（${sampleUrls.length}）</div><div style="font-size:11px;color:var(--text2,#888);max-height:80px;overflow-y:auto;background:var(--bg2,#f9f9f9);padding:6px 8px;border-radius:4px;">${sampleUrls.map(u => '<div style="word-break:break-all;">' + this.escapeHtml(u) + '</div>').join('')}</div></div>`;
+    }
+    if (urls.length) {
+      urlsHtml += `<div style="margin-top:10px;"><div style="font-size:12px;font-weight:600;margin-bottom:4px;">目标 URL（${urls.length}）</div><div style="font-size:11px;color:var(--text2,#888);max-height:80px;overflow-y:auto;background:var(--bg2,#f9f9f9);padding:6px 8px;border-radius:4px;">${urls.map(u => '<div style="word-break:break-all;">' + this.escapeHtml(u) + '</div>').join('')}</div></div>`;
+    }
+
+    const dlg = document.createElement('div');
+    dlg.id = 'aiworkflowTemplatePreviewModal';
+    dlg.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:100001;display:flex;align-items:center;justify-content:center;font-family:inherit;';
+    dlg.innerHTML = `
+      <div style="background:var(--bg,#fff);color:var(--text,#222);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,0.25);padding:20px 22px;width:600px;max-width:92vw;max-height:80vh;display:flex;flex-direction:column;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <h3 style="margin:0;font-size:15px;">👁 模板预览：${this.escapeHtml(task.name || fileLabel)}</h3>
+          <button id="tplPreviewClose" style="background:transparent;border:none;font-size:18px;cursor:pointer;color:var(--text2,#888);">✕</button>
+        </div>
+        <div style="flex:1;overflow-y:auto;font-size:12px;line-height:1.7;">
+          <div><b>任务类型：</b>${typeLabel}</div>
+          <div><b>任务名称：</b>${this.escapeHtml(task.name || '')}</div>
+          ${cfg.selector ? `<div><b>条目选择器：</b><code style="font-family:monospace;background:var(--bg2,#f5f5f5);padding:1px 4px;border-radius:3px;">${this.escapeHtml(cfg.selector)}</code></div>` : ''}
+          ${cfg.classifyBy ? `<div><b>分类依据：</b>${this.escapeHtml(cfg.classifyBy)}</div>` : ''}
+          ${cfg.intervalMinutes ? `<div><b>检查间隔：</b>${cfg.intervalMinutes} 分钟</div>` : ''}
+          ${cfg.autoExport !== undefined ? `<div><b>自动导出：</b>${cfg.autoExport ? '✓' : '✗'}（格式：${cfg.exportFormat || 'json'}）</div>` : ''}
+          ${fieldsHtml}
+          ${urlsHtml}
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:14px;">
+          <button id="tplPreviewOk" style="padding:7px 18px;border:none;border-radius:6px;background:var(--primary,#3498db);color:#fff;cursor:pointer;font-size:13px;">关闭</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(dlg);
+    const close = () => dlg.remove();
+    dlg.querySelector('#tplPreviewClose').onclick = close;
+    dlg.querySelector('#tplPreviewOk').onclick = close;
+    dlg.onclick = (e) => { if (e.target === dlg) close(); };
   },
 
   // ===== Task 4: 从抓取信息卡片列表中选取 URL =====
