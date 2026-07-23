@@ -10,6 +10,21 @@ desktop.ini
 .electron-cache/
 .electron-builder-cache/
 
+# 安装包/构建产物（从 GitHub Releases 分发，不进仓库）
+windows/
+linux/
+*.exe
+*.deb
+*.AppImage
+*.rpm
+*.dmg
+
+# 演示/比赛材料
+DEMO_POST.md
+demo.html
+wsw-demo.html
+SCREENSHOTS/
+
 # 临时测试/调试脚本
 test-*.js
 cdp-*.js
