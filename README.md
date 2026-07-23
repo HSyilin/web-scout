@@ -232,7 +232,6 @@ web-scout/
 │       ├── recruitment/       # 招聘模板×3
 │       ├── comments/          # 评论模板×1
 │       └── products/          # 商品模板×2
-├── .trae/specs/               # Spec 驱动开发规划文档
 ├── CHANGELOG.md               # 变更日志
 ├── package.json
 └── README.md
