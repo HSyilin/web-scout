@@ -172,6 +172,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getLogs: () => ipcRenderer.invoke('mcp-get-logs')
   },
 
+  // MCP 自启动配置（持久化在 settings.json）
+  getMcpAutostart: () => ipcRenderer.invoke('mcp-get-autostart'),
+  setMcpAutostart: (enabled) => ipcRenderer.invoke('mcp-set-autostart', enabled),
+
   // ============ 事件回调 ============
 
   // 下载进度

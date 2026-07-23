@@ -10,5 +10,6 @@ desktop.ini
 .electron-cache/
 .electron-builder-cache/
 
-# 临时测试脚本
+# 临时测试/调试脚本
 test-*.js
+cdp-*.js

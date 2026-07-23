@@ -1,0 +1,75 @@
+name: Build Windows Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: 'Upload Windows installer to GitHub Release (tag name, e.g. v2.0.0). Leave empty to skip.'
+        required: false
+        default: 'v2.0.0'
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows installer (nsis) and portable
+        run: npx electron-builder --win --publish never
+
+      - name: List build output
+        run: |
+          dir dist\*.exe 2>$null
+          dir dist\*.nsis.7z 2>$null
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-scout-windows-installer
+          path: dist/*-Setup.exe
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-scout-windows-portable
+          path: dist/*-portable.exe
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Determine release tag
+        id: reltag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.event.inputs.upload_to_release }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload to Release
+        if: steps.reltag.outputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.reltag.outputs.tag }}
+          files: |
+            dist/*-Setup.exe
+            dist/*-portable.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

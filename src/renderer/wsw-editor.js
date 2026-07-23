@@ -14,6 +14,7 @@ const WSWEditor = {
     panY: 0,
     maxZ: 1,
     undoStack: [],
+    redoStack: [],
     spaceHeld: false,
     clipboard: [],
     // 标签页功能
@@ -23,6 +24,12 @@ const WSWEditor = {
 
   init() {
     this.bindEvents();
+    // 全局点击关闭下拉菜单
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.wsw-dropdown')) {
+        this._closeAllDropdowns();
+      }
+    });
     // Task 16.3: 监听 AI 工作流任务删除事件，将关联容器显示为"任务已删除"占位
     try {
       if (window.electronAPI?.aiworkflowAPI?.onTaskDeleted) {
@@ -54,38 +61,23 @@ const WSWEditor = {
     const canvas = document.getElementById('wswCanvas');
     if (!wrap || !canvas) return;
 
-    // 画布点击 - 取消选中
-    wrap.addEventListener('mousedown', (e) => {
-      if (e.target === wrap || e.target === canvas || e.target.classList.contains('wsw-canvas-inner')) {
-        this.deselectAll();
-        // 关闭编辑
-        if (this.state.editingCardId !== null) {
-          this.commitEdit();
-        }
-      }
-      // 关闭右键菜单
-      this.hideContextMenu();
-    });
+    // ===== 画布平移状态 =====
+    let isPanning = false;
+    let panStartX = 0, panStartY = 0;
+    let panOrigX = 0, panOrigY = 0;
 
-    // 画布右键菜单
-    wrap.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      this.showCanvasContextMenu(e);
-    });
+    const isBlankTarget = (e) => e.target === wrap || e.target === canvas || e.target.classList.contains('wsw-canvas-inner');
+    const inInputModule = () => document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.contentEditable === 'true');
 
-    // 滚轮缩放
-    wrap.addEventListener('wheel', (e) => {
-      if (e.ctrlKey) {
-        e.preventDefault();
-        const delta = e.deltaY > 0 ? -0.1 : 0.1;
-        this.setZoom(this.state.zoom + delta);
-      }
-    });
-
-    // 键盘快捷键
+    // 空格切换 grab 光标（全局键盘监听，区分模块）
     document.addEventListener('keydown', (e) => {
       if (App.state.currentModule !== 'wsw') return;
-      // 编辑中不拦截快捷键
+      if (e.code === 'Space' && !e.repeat && !inInputModule()) {
+        e.preventDefault();
+        this.state.spaceHeld = true;
+        if (!isPanning) wrap.style.cursor = 'grab';
+      }
+      // 编辑中不拦截以下快捷键
       if (this.state.editingCardId !== null && e.target.contentEditable === 'true') return;
 
       if (e.key === 'Delete' && this.state.selectedCards.size > 0) {
@@ -121,6 +113,95 @@ const WSWEditor = {
         this.selectAll();
       }
     });
+
+    document.addEventListener('keyup', (e) => {
+      if (e.code === 'Space') {
+        this.state.spaceHeld = false;
+        if (!isPanning && App.state.currentModule === 'wsw') wrap.style.cursor = '';
+      }
+    });
+
+    // 画布 mousedown - 判断平移 / 取消选中
+    wrap.addEventListener('mousedown', (e) => {
+      if (App.state.currentModule !== 'wsw') return;
+      const blank = isBlankTarget(e);
+      // 平移触发条件：中键 / 空格+左键 / Shift+左键 / 空白处左键
+      const wantPan = e.button === 1 || (e.button === 0 && (this.state.spaceHeld || e.shiftKey || blank));
+      if (wantPan) {
+        e.preventDefault();
+        isPanning = true;
+        panStartX = e.clientX;
+        panStartY = e.clientY;
+        panOrigX = this.state.panX;
+        panOrigY = this.state.panY;
+        this.state.isPanning = true;
+        wrap.style.cursor = 'grabbing';
+        // 仍在空白处取消选中（不影响平移），关闭编辑
+        if (blank) {
+          this.deselectAll();
+          if (this.state.editingCardId !== null) this.commitEdit();
+        }
+        return;
+      }
+      // 非空白非平移：取消选中 + 关闭编辑
+      if (blank) {
+        this.deselectAll();
+        if (this.state.editingCardId !== null) this.commitEdit();
+      }
+      this.hideContextMenu();
+    });
+
+    // 画布 mousemove - 执行平移
+    wrap.addEventListener('mousemove', (e) => {
+      if (!isPanning) return;
+      const dx = e.clientX - panStartX;
+      const dy = e.clientY - panStartY;
+      this.state.panX = panOrigX + dx;
+      this.state.panY = panOrigY + dy;
+      this.applyTransform();
+    });
+
+    // 全局 mouseup - 结束平移（绑定到 document 防止鼠标移出 wrap 后无法释放）
+    document.addEventListener('mouseup', () => {
+      if (isPanning) {
+        isPanning = false;
+        this.state.isPanning = false;
+        wrap.style.cursor = this.state.spaceHeld ? 'grab' : '';
+      }
+    });
+
+    // 中键点击不触发 auxclick 默认行为
+    wrap.addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); });
+
+    // 画布右键菜单
+    wrap.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      this.showCanvasContextMenu(e);
+    });
+
+    // 滚轮缩放（无需 CtrlKey，以鼠标位置为中心，符合主流画布工具习惯）
+    wrap.addEventListener('wheel', (e) => {
+      if (App.state.currentModule !== 'wsw') return;
+      // 在可编辑/可滚动元素内不拦截滚轮（让文本框等正常滚动）
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable ||
+          t.closest('[contenteditable="true"]') || t.closest('webview') || t.closest('video') || t.closest('audio'))) {
+        return;
+      }
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.1 : 0.1;
+      const newZoom = Math.max(0.3, Math.min(3, this.state.zoom + delta));
+      if (newZoom === this.state.zoom) return;
+      const rect = wrap.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      // 保持鼠标点在画布坐标系中位置不变
+      this.state.panX = mx - (mx - this.state.panX) * (newZoom / this.state.zoom);
+      this.state.panY = my - (my - this.state.panY) * (newZoom / this.state.zoom);
+      this.state.zoom = newZoom;
+      document.getElementById('wswZoomDisplay').textContent = Math.round(this.state.zoom * 100) + '%';
+      this.applyTransform();
+    }, { passive: false });
   },
 
   // 全选
@@ -129,6 +210,33 @@ const WSWEditor = {
     this.state.selectedCards.clear();
     this.state.doc.cards.forEach(c => this.state.selectedCards.add(c.id));
     this.updateCardSelection();
+  },
+
+  // ===== 下拉菜单交互 =====
+  _toggleDropdown(btn) {
+    const menu = btn.parentElement.querySelector('.wsw-dropdown-menu');
+    if (!menu) return;
+    const isOpen = menu.classList.contains('show');
+    this._closeAllDropdowns();
+    if (!isOpen) menu.classList.add('show');
+  },
+
+  _closeAllDropdowns() {
+    document.querySelectorAll('.wsw-dropdown-menu.show').forEach(m => m.classList.remove('show'));
+  },
+
+  _quickSetBackground(type, value) {
+    if (!this.state.doc) return;
+    this.saveUndo();
+    if (type === 'color') {
+      this.state.doc.background = { type: 'color', value: value || '#1a1a2e' };
+    } else if (type === 'gradient') {
+      this.state.doc.background = { type: 'gradient', grad1: '#667eea', grad2: '#764ba2', direction: '135' };
+    } else if (type.startsWith('scifi-')) {
+      this.state.doc.background = { type: type };
+    }
+    this.applyBackground();
+    App.showToast('背景已切换');
   },
 
   // ===== 画布背景设置 =====
@@ -140,8 +248,19 @@ const WSWEditor = {
 
     // 预设颜色
     const presets = ['#1a1a2e', '#0f0f1a', '#16213e', '#0d1b2a', '#1b263b', '#2c3e50', '#ffffff', '#f0f1f5', '#f5f6fa'];
+    // 预设渐变
+    const gradPresets = [
+      { name: '紫蓝', g1: '#667eea', g2: '#764ba2' },
+      { name: '粉红', g1: '#f093fb', g2: '#f5576c' },
+      { name: '青蓝', g1: '#4facfe', g2: '#00f2fe' },
+      { name: '绿青', g1: '#43e97b', g2: '#38f9d7' },
+      { name: '橙黄', g1: '#fa709a', g2: '#fee140' },
+      { name: '深空', g1: '#0c0c1d', g2: '#1a1a3e' },
+      { name: '暗夜', g1: '#232526', g2: '#414345' },
+      { name: '森林', g1: '#134e5e', g2: '#71b280' }
+    ];
 
-    overlay.innerHTML = '<div class="wsw-link-panel" style="width:480px">' +
+    overlay.innerHTML = '<div class="wsw-link-panel" style="width:560px;max-height:88vh;overflow-y:auto">' +
       '<div class="wsw-link-header"><span>🎨 画布背景设置</span><button class="wsw-link-close">✕</button></div>' +
       '<div class="wsw-link-body">' +
         '<div class="wsw-link-section">' +
@@ -149,6 +268,11 @@ const WSWEditor = {
           '<div class="wsw-bg-type-tabs">' +
             '<button class="wsw-bg-type-tab' + (bg.type === 'color' ? ' active' : '') + '" data-type="color">🎨 纯色</button>' +
             '<button class="wsw-bg-type-tab' + (bg.type === 'gradient' ? ' active' : '') + '" data-type="gradient">🌈 渐变</button>' +
+            '<button class="wsw-bg-type-tab' + (bg.type === 'image' ? ' active' : '') + '" data-type="image">🖼 图片</button>' +
+            '<button class="wsw-bg-type-tab' + (bg.type === 'scifi-cyber' ? ' active' : '') + '" data-type="scifi-cyber">🌐 赛博</button>' +
+            '<button class="wsw-bg-type-tab' + (bg.type === 'scifi-starfield' ? ' active' : '') + '" data-type="scifi-starfield">✨ 星空</button>' +
+            '<button class="wsw-bg-type-tab' + (bg.type === 'scifi-neon' ? ' active' : '') + '" data-type="scifi-neon">💡 霓虹</button>' +
+            '<button class="wsw-bg-type-tab' + (bg.type === 'scifi-hud' ? ' active' : '') + '" data-type="scifi-hud">🖥 HUD</button>' +
           '</div>' +
         '</div>' +
         '<div class="wsw-link-section" id="bgColorSection" style="display:' + (bg.type === 'color' ? 'block' : 'none') + '">' +
@@ -156,24 +280,56 @@ const WSWEditor = {
           '<div class="wsw-color-presets">' +
             presets.map(c => '<button class="wsw-color-preset' + (bg.value === c ? ' selected' : '') + '" style="background:' + c + '" data-color="' + c + '"></button>').join('') +
           '</div>' +
-          '<div style="margin-top:10px"><input type="color" id="bgColorPicker" value="' + (bg.value || '#1a1a2e') + '" style="width:60px;height:36px;cursor:pointer;border:1px solid var(--border);border-radius:6px;background:none"></div>' +
+          '<div style="margin-top:10px;display:flex;align-items:center;gap:10px"><input type="color" id="bgColorPicker" value="' + (bg.value || '#1a1a2e') + '" style="width:60px;height:36px;cursor:pointer;border:1px solid var(--border);border-radius:6px;background:none"><input type="text" id="bgColorText" value="' + (bg.value || '#1a1a2e') + '" style="flex:1;padding:6px 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:12px"></div>' +
         '</div>' +
         '<div class="wsw-link-section" id="bgGradientSection" style="display:' + (bg.type === 'gradient' ? 'block' : 'none') + '">' +
-          '<label class="wsw-link-label">渐变颜色1</label>' +
-          '<input type="color" id="bgGrad1" value="' + (bg.grad1 || '#667eea') + '" style="width:60px;height:36px;cursor:pointer;border:1px solid var(--border);border-radius:6px;background:none">' +
-          '<label class="wsw-link-label" style="margin-top:8px">渐变颜色2</label>' +
-          '<input type="color" id="bgGrad2" value="' + (bg.grad2 || '#764ba2') + '" style="width:60px;height:36px;cursor:pointer;border:1px solid var(--border);border-radius:6px;background:none">' +
-          '<label class="wsw-link-label" style="margin-top:8px">渐变方向</label>' +
+          '<label class="wsw-link-label">预设渐变</label>' +
+          '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px">' +
+            gradPresets.map((g, i) => '<button class="wsw-grad-preset' + (bg.grad1 === g.g1 && bg.grad2 === g.g2 ? ' selected' : '') + '" data-g1="' + g.g1 + '" data-g2="' + g.g2 + '" title="' + g.name + '" style="height:36px;border-radius:6px;cursor:pointer;border:2px solid transparent;background:linear-gradient(135deg,' + g.g1 + ',' + g.g2 + ')"></button>').join('') +
+          '</div>' +
+          '<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px">' +
+            '<div><label class="wsw-link-label">颜色1</label><input type="color" id="bgGrad1" value="' + (bg.grad1 || '#667eea') + '" style="width:60px;height:36px;cursor:pointer;border:1px solid var(--border);border-radius:6px;background:none"></div>' +
+            '<div><label class="wsw-link-label">颜色2</label><input type="color" id="bgGrad2" value="' + (bg.grad2 || '#764ba2') + '" style="width:60px;height:36px;cursor:pointer;border:1px solid var(--border);border-radius:6px;background:none"></div>' +
+          '</div>' +
+          '<label class="wsw-link-label">渐变方向</label>' +
           '<select id="bgGradDir" class="wsw-link-select">' +
             '<option value="135"' + (bg.direction === '135' ? ' selected' : '') + '>↘ 左上→右下</option>' +
             '<option value="90"' + (bg.direction === '90' ? ' selected' : '') + '>→ 左→右</option>' +
             '<option value="180"' + (bg.direction === '180' ? ' selected' : '') + '>↓ 上→下</option>' +
             '<option value="45"' + (bg.direction === '45' ? ' selected' : '') + '>↗ 左下→右上</option>' +
+            '<option value="0"' + (bg.direction === '0' ? ' selected' : '') + '>↑ 下→上</option>' +
+            '<option value="225"' + (bg.direction === '225' ? ' selected' : '') + '>↙ 右上→左下</option>' +
           '</select>' +
+        '</div>' +
+        '<div class="wsw-link-section" id="bgImageSection" style="display:' + (bg.type === 'image' ? 'block' : 'none') + '">' +
+          '<label class="wsw-link-label">上传图片</label>' +
+          '<div style="display:flex;gap:8px;margin-bottom:10px">' +
+            '<input type="file" id="bgImageFile" accept="image/*" style="flex:1;font-size:11px">' +
+          '</div>' +
+          '<label class="wsw-link-label">或粘贴图片 URL</label>' +
+          '<input type="text" id="bgImageUrl" value="' + (bg.value && bg.type === 'image' ? bg.value : '') + '" placeholder="https://..." style="width:100%;padding:6px 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:12px;margin-bottom:10px">' +
+          '<label class="wsw-link-label">填充方式</label>' +
+          '<select id="bgImageFit" class="wsw-link-select">' +
+            '<option value="cover"' + (bg.fit === 'cover' || !bg.fit ? ' selected' : '') + '>铺满（cover）</option>' +
+            '<option value="contain"' + (bg.fit === 'contain' ? ' selected' : '') + '>完整显示（contain）</option>' +
+            '<option value="repeat"' + (bg.fit === 'repeat' ? ' selected' : '') + '>平铺（repeat）</option>' +
+          '</select>' +
+          '<label class="wsw-link-label" style="margin-top:8px">遮罩透明度（0-1，让图片变暗以突出卡片）</label>' +
+          '<input type="range" id="bgImageOverlay" min="0" max="0.9" step="0.1" value="' + (bg.overlay || 0) + '" style="width:100%">' +
+        '</div>' +
+        '<div class="wsw-link-section" id="bgScifiSection" style="display:' + (bg.type.startsWith('scifi-') ? 'block' : 'none') + '">' +
+          '<div style="padding:14px;background:var(--surface2);border-radius:8px;font-size:12px;color:var(--text2);line-height:1.7">' +
+            '<div style="color:var(--primary);font-weight:600;margin-bottom:8px">科幻特效背景</div>' +
+            '🌐 <b>赛博</b>：透视网格 + 粉色地平线光晕 + 扫描线<br>' +
+            '✨ <b>星空</b>：120 颗闪烁星辰 + 深蓝星云<br>' +
+            '💡 <b>霓虹</b>：青/品红/紫三色光团漂浮 + 扫描线<br>' +
+            '🖥 <b>HUD</b>：战术绿网格 + 四角装饰框<br>' +
+            '<div style="margin-top:8px;color:var(--accent)">提示：配合展览模式效果最佳</div>' +
+          '</div>' +
         '</div>' +
         '<div class="wsw-link-section">' +
           '<label class="wsw-link-label">预览</label>' +
-          '<div id="bgPreview" class="wsw-bg-preview" style="height:60px;border-radius:6px;border:1px solid var(--border)"></div>' +
+          '<div id="bgPreview" class="wsw-bg-preview" style="height:80px;border-radius:6px;border:1px solid var(--border);overflow:hidden;position:relative"></div>' +
         '</div>' +
       '</div>' +
       '<div class="wsw-link-footer">' +
@@ -186,16 +342,59 @@ const WSWEditor = {
 
     let bgType = bg.type || 'color';
 
+    const scifiPreviews = {
+      'scifi-cyber': 'radial-gradient(ellipse at 50% 0%, #0a1f3d 0%, #050a1a 60%, #02050d 100%)',
+      'scifi-starfield': 'radial-gradient(ellipse at 30% 20%, #1a1a3e 0%, #050518 60%, #000005 100%)',
+      'scifi-neon': 'linear-gradient(135deg, #0a0a1a 0%, #1a0a2a 100%)',
+      'scifi-hud': 'linear-gradient(180deg, #001a1a 0%, #000a0a 100%)'
+    };
+
     const updatePreview = () => {
       const preview = document.getElementById('bgPreview');
+      preview.innerHTML = '';
+      preview.style.background = '';
       if (bgType === 'color') {
         const color = document.getElementById('bgColorPicker').value;
         preview.style.background = color;
-      } else {
+      } else if (bgType === 'gradient') {
         const g1 = document.getElementById('bgGrad1').value;
         const g2 = document.getElementById('bgGrad2').value;
         const dir = document.getElementById('bgGradDir').value;
         preview.style.background = 'linear-gradient(' + dir + 'deg, ' + g1 + ', ' + g2 + ')';
+      } else if (bgType === 'image') {
+        const url = document.getElementById('bgImageUrl').value || currentImageData;
+        const fit = document.getElementById('bgImageFit').value;
+        const overlay = parseFloat(document.getElementById('bgImageOverlay').value);
+        if (url) {
+          preview.style.background = 'url(' + url + ') center/' + fit + ' no-repeat';
+          if (overlay > 0) {
+            const ov = document.createElement('div');
+            ov.style.cssText = 'position:absolute;inset:0;background:rgba(0,0,0,' + overlay + ');';
+            preview.appendChild(ov);
+          }
+        } else {
+          preview.style.background = 'var(--surface2)';
+          preview.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text2);font-size:12px">请上传图片或粘贴 URL</div>';
+        }
+      } else if (bgType.startsWith('scifi-')) {
+        preview.style.background = scifiPreviews[bgType];
+        if (bgType === 'scifi-cyber' || bgType === 'scifi-hud') {
+          const gridDiv = document.createElement('div');
+          gridDiv.style.cssText = 'position:absolute;inset:0;background-image:linear-gradient(rgba(0,255,255,0.15) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,255,0.15) 1px,transparent 1px);background-size:15px 15px;';
+          preview.appendChild(gridDiv);
+        } else if (bgType === 'scifi-starfield') {
+          for (let i = 0; i < 25; i++) {
+            const s = document.createElement('div');
+            s.style.cssText = 'position:absolute;width:2px;height:2px;background:#fff;border-radius:50%;left:' + (Math.random() * 100) + '%;top:' + (Math.random() * 100) + '%;box-shadow:0 0 4px #7df9ff;';
+            preview.appendChild(s);
+          }
+        } else if (bgType === 'scifi-neon') {
+          ['rgba(0,255,255,0.3)', 'rgba(255,0,200,0.25)', 'rgba(150,0,255,0.2)'].forEach((c, i) => {
+            const g = document.createElement('div');
+            g.style.cssText = 'position:absolute;width:80px;height:80px;border-radius:50%;background:radial-gradient(circle,' + c + ' 0%,transparent 60%);left:' + (20 + i * 25) + '%;top:' + (20 + (i % 2) * 30) + '%;';
+            preview.appendChild(g);
+          });
+        }
       }
     };
 
@@ -206,6 +405,8 @@ const WSWEditor = {
         overlay.querySelectorAll('.wsw-bg-type-tab').forEach(t => t.classList.toggle('active', t === tab));
         document.getElementById('bgColorSection').style.display = bgType === 'color' ? 'block' : 'none';
         document.getElementById('bgGradientSection').style.display = bgType === 'gradient' ? 'block' : 'none';
+        document.getElementById('bgImageSection').style.display = bgType === 'image' ? 'block' : 'none';
+        document.getElementById('bgScifiSection').style.display = bgType.startsWith('scifi-') ? 'block' : 'none';
         updatePreview();
       });
     });
@@ -216,12 +417,48 @@ const WSWEditor = {
         overlay.querySelectorAll('.wsw-color-preset').forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
         document.getElementById('bgColorPicker').value = btn.dataset.color;
+        document.getElementById('bgColorText').value = btn.dataset.color;
         updatePreview();
       });
     });
 
-    // 颜色变化
-    ['bgColorPicker', 'bgGrad1', 'bgGrad2', 'bgGradDir'].forEach(id => {
+    // 颜色文本同步
+    const colorPicker = document.getElementById('bgColorPicker');
+    const colorText = document.getElementById('bgColorText');
+    if (colorPicker) colorPicker.addEventListener('input', () => { colorText.value = colorPicker.value; updatePreview(); });
+    if (colorText) colorText.addEventListener('input', () => { if (/^#[0-9a-fA-F]{6}$/.test(colorText.value)) { colorPicker.value = colorText.value; updatePreview(); } });
+
+    // 预设渐变
+    overlay.querySelectorAll('.wsw-grad-preset').forEach(btn => {
+      btn.addEventListener('click', () => {
+        overlay.querySelectorAll('.wsw-grad-preset').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        document.getElementById('bgGrad1').value = btn.dataset.g1;
+        document.getElementById('bgGrad2').value = btn.dataset.g2;
+        updatePreview();
+      });
+    });
+
+    // 图片上传
+    let currentImageData = '';
+    const fileInput = document.getElementById('bgImageFile');
+    if (fileInput) {
+      fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (file.size > 3 * 1024 * 1024) { App.showToast('图片不能超过 3MB'); return; }
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          currentImageData = ev.target.result;
+          document.getElementById('bgImageUrl').value = '';
+          updatePreview();
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // 所有输入变化
+    ['bgColorPicker', 'bgGrad1', 'bgGrad2', 'bgGradDir', 'bgImageUrl', 'bgImageFit', 'bgImageOverlay'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('input', updatePreview);
     });
@@ -240,13 +477,25 @@ const WSWEditor = {
           type: 'color',
           value: document.getElementById('bgColorPicker').value
         };
-      } else {
+      } else if (bgType === 'gradient') {
         this.state.doc.background = {
           type: 'gradient',
           grad1: document.getElementById('bgGrad1').value,
           grad2: document.getElementById('bgGrad2').value,
           direction: document.getElementById('bgGradDir').value
         };
+      } else if (bgType === 'image') {
+        const url = document.getElementById('bgImageUrl').value.trim();
+        const img = currentImageData || url;
+        if (!img) { App.showToast('请上传图片或输入 URL'); return; }
+        this.state.doc.background = {
+          type: 'image',
+          value: img,
+          fit: document.getElementById('bgImageFit').value,
+          overlay: parseFloat(document.getElementById('bgImageOverlay').value)
+        };
+      } else if (bgType.startsWith('scifi-')) {
+        this.state.doc.background = { type: bgType };
       }
       this.applyBackground();
       close();
@@ -257,13 +506,1337 @@ const WSWEditor = {
   applyBackground() {
     if (!this.state.doc || !this.state.doc.background) return;
     const canvas = document.getElementById('wswCanvas');
-    if (!canvas) return;
+    const wrap = document.getElementById('wswCanvasWrap');
+    if (!canvas || !wrap) return;
     const bg = this.state.doc.background;
+    // 清除所有科幻特效层
+    this._removeSciFiLayers();
+    // 背景应用到 wrap（视口固定，平移画布时背景不动），canvas 保持透明
+    canvas.style.background = 'transparent';
+    const isScifi = bg.type && bg.type.startsWith('scifi-');
+    if (wrap) wrap.dataset.scifi = isScifi ? 'true' : 'false';
     if (bg.type === 'gradient') {
-      canvas.style.background = 'linear-gradient(' + (bg.direction || '135') + 'deg, ' + (bg.grad1 || '#667eea') + ', ' + (bg.grad2 || '#764ba2') + ')';
+      wrap.style.background = 'linear-gradient(' + (bg.direction || '135') + 'deg, ' + (bg.grad1 || '#667eea') + ', ' + (bg.grad2 || '#764ba2') + ')';
+    } else if (bg.type === 'scifi-cyber') {
+      // 赛博朋克网格背景 + 扫描线
+      wrap.style.background = 'radial-gradient(ellipse at 50% 0%, #0a1f3d 0%, #050a1a 60%, #02050d 100%)';
+      this._addCyberGrid(wrap);
+      this._addScanlines(wrap);
+    } else if (bg.type === 'scifi-starfield') {
+      // 星空背景
+      wrap.style.background = 'radial-gradient(ellipse at 30% 20%, #1a1a3e 0%, #050518 60%, #000005 100%)';
+      this._addStarfield(wrap);
+    } else if (bg.type === 'scifi-neon') {
+      // 霓虹光晕背景
+      wrap.style.background = '#0a0a1a';
+      this._addNeonGlow(wrap);
+      this._addScanlines(wrap, 0.06);
+    } else if (bg.type === 'scifi-hud') {
+      // HUD 战术界面背景
+      wrap.style.background = 'linear-gradient(180deg, #001a1a 0%, #000a0a 100%)';
+      this._addHudGrid(wrap);
+    } else if (bg.type === 'image') {
+      const fit = bg.fit || 'cover';
+      if (fit === 'repeat') {
+        wrap.style.background = 'url(' + bg.value + ') repeat';
+      } else {
+        wrap.style.background = 'url(' + bg.value + ') center/' + fit + ' no-repeat';
+      }
+      // 添加遮罩层
+      if (bg.overlay && bg.overlay > 0) {
+        let ovLayer = document.getElementById('wswBgOverlay');
+        if (!ovLayer) {
+          ovLayer = this._createLayer(wrap, 'wswBgOverlay', 0);
+        }
+        ovLayer.style.background = 'rgba(0,0,0,' + bg.overlay + ')';
+      } else {
+        const ovLayer = document.getElementById('wswBgOverlay');
+        if (ovLayer) ovLayer.remove();
+      }
     } else {
-      canvas.style.background = bg.value || '#1a1a2e';
+      wrap.style.background = bg.value || '#1a1a2e';
     }
+  },
+
+  // ===== 科幻特效层 =====
+  _removeSciFiLayers() {
+    ['wswFxLayer', 'wswCyberGrid', 'wswStarfield', 'wswScanlines', 'wswNeonGlow', 'wswHudGrid', 'wswBgOverlay'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    });
+  },
+
+  _createLayer(wrap, id, zIndex) {
+    let layer = document.getElementById(id);
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.id = id;
+      layer.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none;overflow:hidden;z-index:' + zIndex + ';';
+      wrap.appendChild(layer);
+    }
+    return layer;
+  },
+
+  _addCyberGrid(wrap) {
+    const layer = this._createLayer(wrap, 'wswCyberGrid', 0);
+    layer.innerHTML = '<div style="position:absolute;inset:-50%;background-image:linear-gradient(rgba(0,255,255,0.08) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,255,0.08) 1px,transparent 1px);background-size:40px 40px;transform:perspective(800px) rotateX(60deg) translateZ(-100px);animation:wswCyberScroll 8s linear infinite;"></div>' +
+      '<div style="position:absolute;inset:0;background:radial-gradient(circle at 50% 100%,rgba(255,0,128,0.15) 0%,transparent 50%);"></div>';
+    if (!document.getElementById('wswCyberKeyframes')) {
+      const style = document.createElement('style');
+      style.id = 'wswCyberKeyframes';
+      style.textContent = '@keyframes wswCyberScroll{from{background-position:0 0}to{background-position:0 40px}}';
+      document.head.appendChild(style);
+    }
+  },
+
+  _addScanlines(wrap, opacity) {
+    const layer = this._createLayer(wrap, 'wswScanlines', 999);
+    layer.style.cssText += 'background:repeating-linear-gradient(0deg,rgba(0,255,255,' + (opacity || 0.04) + ') 0px,rgba(0,255,255,' + (opacity || 0.04) + ') 1px,transparent 1px,transparent 3px);mix-blend-mode:overlay;';
+  },
+
+  _addStarfield(wrap) {
+    const layer = this._createLayer(wrap, 'wswStarfield', 0);
+    let stars = '';
+    for (let i = 0; i < 120; i++) {
+      const x = Math.random() * 100;
+      const y = Math.random() * 100;
+      const size = Math.random() * 2 + 0.5;
+      const delay = Math.random() * 3;
+      const dur = 2 + Math.random() * 3;
+      stars += '<div style="position:absolute;left:' + x + '%;top:' + y + '%;width:' + size + 'px;height:' + size + 'px;background:#fff;border-radius:50%;box-shadow:0 0 ' + (size * 2) + 'px #7df9ff;animation:wswStarTwinkle ' + dur + 's ease-in-out ' + delay + 's infinite;"></div>';
+    }
+    layer.innerHTML = stars;
+    if (!document.getElementById('wswStarKeyframes')) {
+      const style = document.createElement('style');
+      style.id = 'wswStarKeyframes';
+      style.textContent = '@keyframes wswStarTwinkle{0%,100%{opacity:0.3;transform:scale(1)}50%{opacity:1;transform:scale(1.4)}}';
+      document.head.appendChild(style);
+    }
+  },
+
+  _addNeonGlow(wrap) {
+    const layer = this._createLayer(wrap, 'wswNeonGlow', 0);
+    layer.innerHTML =
+      '<div style="position:absolute;top:-200px;left:-200px;width:600px;height:600px;background:radial-gradient(circle,rgba(0,255,255,0.25) 0%,transparent 60%);animation:wswNeonFloat 12s ease-in-out infinite;"></div>' +
+      '<div style="position:absolute;bottom:-200px;right:-200px;width:600px;height:600px;background:radial-gradient(circle,rgba(255,0,200,0.2) 0%,transparent 60%);animation:wswNeonFloat 14s ease-in-out infinite reverse;"></div>' +
+      '<div style="position:absolute;top:30%;right:-150px;width:400px;height:400px;background:radial-gradient(circle,rgba(150,0,255,0.15) 0%,transparent 60%);animation:wswNeonFloat 16s ease-in-out 2s infinite;"></div>';
+    if (!document.getElementById('wswNeonKeyframes')) {
+      const style = document.createElement('style');
+      style.id = 'wswNeonKeyframes';
+      style.textContent = '@keyframes wswNeonFloat{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(40px,-30px) scale(1.15)}}';
+      document.head.appendChild(style);
+    }
+  },
+
+  _addHudGrid(wrap) {
+    const layer = this._createLayer(wrap, 'wswHudGrid', 0);
+    layer.innerHTML =
+      '<div style="position:absolute;inset:0;background-image:linear-gradient(rgba(0,255,200,0.06) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,200,0.06) 1px,transparent 1px);background-size:60px 60px;"></div>' +
+      '<div style="position:absolute;top:20px;left:20px;width:60px;height:60px;border:2px solid rgba(0,255,200,0.4);border-right:none;border-bottom:none;"></div>' +
+      '<div style="position:absolute;top:20px;right:20px;width:60px;height:60px;border:2px solid rgba(0,255,200,0.4);border-left:none;border-bottom:none;"></div>' +
+      '<div style="position:absolute;bottom:20px;left:20px;width:60px;height:60px;border:2px solid rgba(0,255,200,0.4);border-right:none;border-top:none;"></div>' +
+      '<div style="position:absolute;bottom:20px;right:20px;width:60px;height:60px;border:2px solid rgba(0,255,200,0.4);border-left:none;border-top:none;"></div>';
+  },
+
+  // ===== 展览配置管理 =====
+  // 获取或初始化展览配置
+  getExhibitConfig() {
+    if (!this.state.doc) return null;
+    if (!this.state.doc.exhibitConfig) {
+      this.state.doc.exhibitConfig = { pages: [] };
+    }
+    return this.state.doc.exhibitConfig;
+  },
+
+  // 从当前卡片自动生成展览配置（首次进入时）
+  _autoGenerateExhibitConfig() {
+    const cfg = this.getExhibitConfig();
+    if (cfg.pages.length > 0) return cfg;  // 已有配置不覆盖
+    const wrap = document.getElementById('wswCanvasWrap');
+    const ww = wrap ? wrap.clientWidth : 1000;
+    const wh = wrap ? wrap.clientHeight : 700;
+    // 按阅读顺序排序
+    const sorted = this.state.doc.cards.slice().sort((a, b) => {
+      const dy = (a.y + a.h / 2) - (b.y + b.h / 2);
+      if (Math.abs(dy) > 60) return dy;
+      return (a.x + a.w / 2) - (b.x + b.w / 2);
+    });
+    const pages = this._paginateCards(sorted, ww, wh);
+    const margin = 40;
+    pages.forEach((pageCards, i) => {
+      // 计算边界并归一化到视口坐标
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      pageCards.forEach(c => {
+        minX = Math.min(minX, c.x); minY = Math.min(minY, c.y);
+        maxX = Math.max(maxX, c.x + c.w); maxY = Math.max(maxY, c.y + c.h);
+      });
+      const cw = maxX - minX || 1, ch = maxY - minY || 1;
+      const availW = ww - margin * 2, availH = wh - margin * 2;
+      const scale = Math.min(availW / cw, availH / ch);
+      const slots = pageCards.map(c => ({
+        id: 'slot_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+        x: Math.round(margin + (c.x - minX) * scale),
+        y: Math.round(margin + (c.y - minY) * scale),
+        w: Math.round(c.w * scale),
+        h: Math.round(c.h * scale),
+        cardId: c.id,
+        displayMode: 'fit',
+        transition: 'slide'
+      }));
+      cfg.pages.push({ name: '第 ' + (i + 1) + ' 页', slots: slots });
+    });
+    return cfg;
+  },
+
+  // ===== 展览编辑器 =====
+  enterExhibitEditor() {
+    if (!this.state.doc) {
+      App.showToast('请先新建或打开文档');
+      return;
+    }
+    if (this._exhibitEditing) return;
+    this._exhibitEditing = true;
+    this._exhibitEditPage = 0;
+    this._exhibitEditSelectedSlot = null;
+
+    // 自动生成配置（如果为空且有卡片）
+    if (this.state.doc.cards.length > 0) {
+      this._autoGenerateExhibitConfig();
+    } else {
+      // 无卡片时创建一个空页
+      this.getExhibitConfig();
+      if (this.state.doc.exhibitConfig.pages.length === 0) {
+        this.state.doc.exhibitConfig.pages.push({ name: '第 1 页', slots: [] });
+      }
+    }
+
+    // 保存当前视图状态
+    this._exhibitEditSavedZoom = this.state.zoom;
+    this._exhibitEditSavedPanX = this.state.panX;
+    this._exhibitEditSavedPanY = this.state.panY;
+
+    // 保留主工具栏（用户可用菜单栏添加卡片），仅隐藏标签栏
+    const tabBar = document.querySelector('.wsw-tab-bar');
+    if (tabBar) tabBar.style.display = 'none';
+
+    // 给画布容器加 class，用 CSS 隐藏画布卡片（新添加的卡片也会自动隐藏）
+    const wrap = document.getElementById('wswCanvasWrap');
+    if (wrap) wrap.classList.add('exhibit-editing');
+
+    // 重置视图到 100%
+    this.state.zoom = 1;
+    this.state.panX = 0;
+    this.state.panY = 0;
+    this.applyTransform();
+
+    // 创建编辑工具栏
+    this._createExhibitEditToolbar();
+
+    // 渲染编辑层
+    this._renderExhibitEditPage();
+
+    App.showToast('展览编辑器 · 添加框→调整→双击选卡→选展示方式');
+  },
+
+  _createExhibitEditToolbar() {
+    const old = document.getElementById('wswExhibitEditToolbar');
+    if (old) old.remove();
+    const cfg = this.getExhibitConfig();
+    const tb = document.createElement('div');
+    tb.id = 'wswExhibitEditToolbar';
+    tb.className = 'wsw-exhibit-edit-toolbar';
+    tb.innerHTML =
+      '<div class="ee-group">' +
+        '<span class="ee-label">展览编辑</span>' +
+        '<button class="ee-btn" id="eeAddSlot" title="添加卡片框">▭ 添加框</button>' +
+        '<button class="ee-btn" id="eeDelSlot" title="删除选中框">🗑 删除框</button>' +
+      '</div>' +
+      '<div class="ee-divider"></div>' +
+      '<div class="ee-group">' +
+        '<button class="ee-btn" id="eePrevPage" title="上一页">◀</button>' +
+        '<span class="ee-page-info" id="eePageInfo">1/' + cfg.pages.length + '</span>' +
+        '<button class="ee-btn" id="eeNextPage" title="下一页">▶</button>' +
+        '<button class="ee-btn" id="eeAddPage" title="添加页">＋ 页</button>' +
+        '<button class="ee-btn" id="eeDelPage" title="删除当前页">－ 页</button>' +
+        '<input type="text" class="ee-page-name" id="eePageName" placeholder="页名称" value="' + this.esc(cfg.pages[this._exhibitEditPage] ? cfg.pages[this._exhibitEditPage].name : '') + '">' +
+      '</div>' +
+      '<div class="ee-divider"></div>' +
+      '<div class="ee-group">' +
+        '<span class="ee-label">选中框展示方式：</span>' +
+        '<select class="ee-select" id="eeDisplayMode" disabled>' +
+          '<option value="fit">适应（保比例留白）</option>' +
+          '<option value="fill">填充（保比例裁剪）</option>' +
+          '<option value="stretch">拉伸（铺满）</option>' +
+          '<option value="contain">居中（原始大小）</option>' +
+        '</select>' +
+        '<select class="ee-select" id="eeTransition" disabled>' +
+          '<option value="slide">滑入过渡</option>' +
+          '<option value="fade">淡入过渡</option>' +
+          '<option value="zoom">缩放过渡</option>' +
+          '<option value="none">无过渡</option>' +
+        '</select>' +
+      '</div>' +
+      '<div class="ee-divider"></div>' +
+      '<div class="ee-group">' +
+        '<button class="ee-btn primary" id="eePlay" title="播放预览">▶ 播放</button>' +
+        '<button class="ee-btn" id="eeExit" title="退出编辑">✕ 退出</button>' +
+      '</div>';
+    document.body.appendChild(tb);
+
+    document.getElementById('eeAddSlot').onclick = () => this._exhibitAddSlot();
+    document.getElementById('eeDelSlot').onclick = () => this._exhibitDelSlot();
+    document.getElementById('eePrevPage').onclick = () => this._exhibitEditGotoPage(this._exhibitEditPage - 1);
+    document.getElementById('eeNextPage').onclick = () => this._exhibitEditGotoPage(this._exhibitEditPage + 1);
+    document.getElementById('eeAddPage').onclick = () => this._exhibitAddPage();
+    document.getElementById('eeDelPage').onclick = () => this._exhibitDelPage();
+    document.getElementById('eePageName').onchange = (e) => this._exhibitRenamePage(e.target.value);
+    document.getElementById('eeDisplayMode').onchange = (e) => this._exhibitSetSlotProp('displayMode', e.target.value);
+    document.getElementById('eeTransition').onchange = (e) => this._exhibitSetSlotProp('transition', e.target.value);
+    document.getElementById('eePlay').onclick = () => {
+      this.exitExhibitEditor(true);
+    };
+    document.getElementById('eeExit').onclick = () => this.exitExhibitEditor(false);
+
+    document.addEventListener('keydown', this._exhibitEditKeyHandler = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); this.exitExhibitEditor(false); }
+      else if (e.key === 'Delete' && this._exhibitEditSelectedSlot) { e.preventDefault(); this._exhibitDelSlot(); }
+    });
+  },
+
+  // 渲染展览编辑页（卡片框 + 预览）
+  _renderExhibitEditPage() {
+    const cfg = this.getExhibitConfig();
+    const page = cfg.pages[this._exhibitEditPage];
+    if (!page) return;
+
+    // 画布卡片已由 CSS class .exhibit-editing 隐藏，无需 inline 隐藏
+
+    // 移除旧编辑层
+    const oldLayer = document.getElementById('wswExhibitEditLayer');
+    if (oldLayer) oldLayer.remove();
+
+    // 创建编辑层
+    const wrap = document.getElementById('wswCanvasWrap');
+    const layer = document.createElement('div');
+    layer.id = 'wswExhibitEditLayer';
+    layer.className = 'wsw-exhibit-edit-layer';
+
+    // 为每个 slot 创建卡片框
+    page.slots.forEach(slot => {
+      const el = this._createSlotElement(slot, page);
+      layer.appendChild(el);
+    });
+
+    // 点击空白处取消选中
+    layer.onclick = (e) => {
+      if (e.target === layer) this._exhibitSelectSlot(null);
+    };
+
+    wrap.appendChild(layer);
+    this._updateExhibitEditPageInfo();
+    // 渲染 slot 内的图表卡片（延迟以等待布局完成）
+    setTimeout(() => this._initSlotCharts(layer), 50);
+  },
+
+  // 初始化编辑层中 slot 内的图表卡片（避免与画布上的图表 ID 冲突）
+  _initSlotCharts(layer) {
+    if (!layer) return;
+    const slots = layer.querySelectorAll('.wsw-exhibit-slot');
+    slots.forEach(slotEl => {
+      const canvas = slotEl.querySelector('canvas.wsw-chart-canvas');
+      if (!canvas) return;
+      const cardId = parseInt(canvas.id.replace('chartCard_', ''));
+      const card = this.state.doc.cards.find(c => c.id === cardId);
+      if (!card) return;
+      // 改 ID 避免与画布上的图表冲突
+      canvas.id = 'slotChart_' + cardId;
+      // 确保数据已提取
+      if (!card.chartData) {
+        if (card.inlineData) {
+          card.chartData = { labels: (card.inlineData.labels || []).slice(), values: (card.inlineData.values || []).slice() };
+        } else if (card.sourceCardId) {
+          const sourceCard = this.state.doc.cards.find(c => c.id === card.sourceCardId);
+          card.chartData = this._extractChartData(sourceCard, card.chartType || 'bar', card);
+        }
+      }
+      const data = card.chartData || { labels: [], values: [] };
+      const chartType = card.chartType || 'bar';
+      if (chartType === 'bar') this._drawChartBar(canvas, data);
+      else if (chartType === 'pie') this._drawChartPie(canvas, data);
+      else if (chartType === 'line') this._drawChartLine(canvas, data);
+      else if (chartType === 'wordcloud') this._drawWordCloud(canvas, data);
+    });
+  },
+
+  // 创建一个卡片框元素
+  _createSlotElement(slot, page) {
+    const el = document.createElement('div');
+    el.className = 'wsw-exhibit-slot';
+    el.dataset.slotId = slot.id;
+    el.dataset.displayMode = slot.displayMode || 'fit';
+    el.style.left = slot.x + 'px';
+    el.style.top = slot.y + 'px';
+    el.style.width = slot.w + 'px';
+    el.style.height = slot.h + 'px';
+    if (this._exhibitEditSelectedSlot === slot.id) el.classList.add('selected');
+
+    // 直接在 slot 中渲染完整卡片元素（确保图表等能正确初始化）
+    const card = this.state.doc.cards.find(c => c.id === slot.cardId);
+    if (card) {
+      const cardEl = this.createCardElement(card);
+      cardEl.classList.add('slot-card-content');
+      cardEl.style.position = 'absolute';
+      cardEl.style.left = '0';
+      cardEl.style.top = '0';
+      cardEl.style.width = '100%';
+      cardEl.style.height = '100%';
+      // 禁用卡片内部交互（拖拽/编辑等），让 slot 的事件正常工作
+      cardEl.style.pointerEvents = 'none';
+      el.appendChild(cardEl);
+
+      // 标签和展示方式徽章
+      const label = document.createElement('div');
+      label.className = 'wsw-exhibit-slot-label';
+      label.textContent = card.name || this.cardTypeLabel(card.type);
+      el.appendChild(label);
+
+      const modeBadge = document.createElement('div');
+      modeBadge.className = 'wsw-exhibit-slot-mode';
+      modeBadge.textContent = this._displayModeLabel(slot.displayMode);
+      el.appendChild(modeBadge);
+    } else {
+      el.classList.add('empty');
+      const emptyHint = document.createElement('div');
+      emptyHint.className = 'wsw-exhibit-slot-empty';
+      emptyHint.textContent = '双击选择卡片';
+      el.appendChild(emptyHint);
+    }
+
+    // 调整大小手柄
+    const resize = document.createElement('div');
+    resize.className = 'wsw-exhibit-slot-resize';
+    el.appendChild(resize);
+
+    // 事件
+    el.onmousedown = (e) => {
+      if (e.target.classList.contains('wsw-exhibit-slot-resize')) {
+        this._exhibitSlotResize(e, slot, el);
+      } else {
+        this._exhibitSlotDrag(e, slot, el);
+      }
+    };
+    el.ondblclick = (e) => {
+      e.stopPropagation();
+      this._exhibitSelectSlot(slot.id);
+      this._showSlotCardPicker(slot);
+    };
+    // 单击选中
+    el.onclick = (e) => {
+      e.stopPropagation();
+      this._exhibitSelectSlot(slot.id);
+    };
+
+    return el;
+  },
+
+  // 获取卡片内容预览文本（用于卡片选择器）
+  _getCardPreviewText(card) {
+    try {
+      if (card.type === 'textbox' || card.type === 'textContainer') {
+        const text = (card.content || card.mdContent || '').replace(/[#*>\-|`]/g, '').trim();
+        return text.slice(0, 80) || '(空文本)';
+      }
+      if (card.type === 'table' || card.type === 'excelContainer') {
+        const rows = card.tableData ? card.tableData.length : 0;
+        const cols = (card.tableData && card.tableData[0]) ? card.tableData[0].length : 0;
+        if (rows > 0 && card.tableData[0]) {
+          return rows + '行×' + cols + '列 · ' + card.tableData[0].slice(0, 3).join(' / ');
+        }
+        return rows + '行×' + cols + '列';
+      }
+      if (card.type === 'chartCard') {
+        const typeLabel = { bar: '柱状图', pie: '饼图', line: '折线图', wordcloud: '词云' }[card.chartType] || '图表';
+        const labels = card.inlineData ? card.inlineData.labels : (card.chartData ? card.chartData.labels : []);
+        return typeLabel + ' · ' + (labels ? labels.length : 0) + ' 个数据点';
+      }
+      if (card.type === 'htmlBlock') {
+        const text = (card.htmlContent || '').replace(/<[^>]+>/g, '').trim();
+        return text.slice(0, 80) || '(HTML 块)';
+      }
+      if (card.type === 'metricCard') {
+        return '指标：' + (card.metricLabel || '') + ' = ' + (card.metricValue || '') + (card.metricUnit || '');
+      }
+      if (card.type === 'gaugeCard') {
+        return '仪表盘：' + (card.gaugeLabel || '') + ' ' + (card.gaugeValue || 0) + (card.gaugeUnit || '');
+      }
+      if (card.type === 'statCard') {
+        const items = card.statItems || [];
+        return items.slice(0, 2).map(i => i.label + ':' + i.value).join(' / ') || '(统计卡)';
+      }
+      if (card.type === 'compareCard') {
+        return (card.compareLeftTitle || '方案A') + ' vs ' + (card.compareRightTitle || '方案B');
+      }
+      if (card.type === 'funnelCard') {
+        return '漏斗 · ' + (card.funnelStages ? card.funnelStages.length : 0) + ' 阶段';
+      }
+      if (card.type === 'flowCard') {
+        return '流程 · ' + (card.flowSteps ? card.flowSteps.length : 0) + ' 步骤';
+      }
+      if (card.type === 'progressCard') {
+        return '进度：' + (card.progressLabel || '') + ' ' + (card.progressValue || 0) + '%';
+      }
+      if (card.type === 'timelineCard') {
+        return '时间轴 · ' + (card.timelineEvents ? card.timelineEvents.length : 0) + ' 事件';
+      }
+      if (card.type === 'calloutCard') {
+        return (card.calloutType || '提示') + ': ' + (card.calloutText || '').slice(0, 60);
+      }
+      if (card.type === 'radarCard') {
+        return '雷达图 · ' + (card.radarLabels ? card.radarLabels.length : 0) + ' 维度';
+      }
+      if (card.type === 'aiworkflow') {
+        return 'AI工作流容器';
+      }
+      if (card.type === 'videoContainer') return '视频容器';
+      if (card.type === 'audioContainer') return '音频容器';
+      if (card.type === 'qrcodeCard') return '二维码';
+      if (card.type === 'dividerCard') return '分隔线';
+      if (card.type === 'shape') return '形状: ' + (card.shapeType || 'rect');
+      return this.cardTypeLabel(card.type);
+    } catch (e) {
+      return this.cardTypeLabel(card.type);
+    }
+  },
+
+  _displayModeLabel(mode) {
+    const map = { fit: '适应', fill: '填充', stretch: '拉伸', contain: '居中' };
+    return map[mode] || '适应';
+  },
+
+  // 拖动卡片框
+  _exhibitSlotDrag(e, slot, el) {
+    e.preventDefault();
+    e.stopPropagation();
+    this._exhibitSelectSlot(slot.id);
+    const startX = e.clientX, startY = e.clientY;
+    const origX = slot.x, origY = slot.y;
+    const move = (ev) => {
+      slot.x = origX + (ev.clientX - startX);
+      slot.y = origY + (ev.clientY - startY);
+      el.style.left = slot.x + 'px';
+      el.style.top = slot.y + 'px';
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  },
+
+  // 调整卡片框大小
+  _exhibitSlotResize(e, slot, el) {
+    e.preventDefault();
+    e.stopPropagation();
+    this._exhibitSelectSlot(slot.id);
+    const startX = e.clientX, startY = e.clientY;
+    const origW = slot.w, origH = slot.h;
+    const move = (ev) => {
+      slot.w = Math.max(80, origW + (ev.clientX - startX));
+      slot.h = Math.max(60, origH + (ev.clientY - startY));
+      el.style.width = slot.w + 'px';
+      el.style.height = slot.h + 'px';
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  },
+
+  // 选中卡片框
+  _exhibitSelectSlot(slotId) {
+    this._exhibitEditSelectedSlot = slotId;
+    document.querySelectorAll('.wsw-exhibit-slot').forEach(el => {
+      el.classList.toggle('selected', el.dataset.slotId === slotId);
+    });
+    // 启用/禁用展示方式选择器
+    const dmSelect = document.getElementById('eeDisplayMode');
+    const trSelect = document.getElementById('eeTransition');
+    if (dmSelect && trSelect) {
+      const enabled = !!slotId;
+      dmSelect.disabled = !enabled;
+      trSelect.disabled = !enabled;
+      if (enabled) {
+        const cfg = this.getExhibitConfig();
+        const page = cfg.pages[this._exhibitEditPage];
+        const slot = page.slots.find(s => s.id === slotId);
+        if (slot) {
+          dmSelect.value = slot.displayMode;
+          trSelect.value = slot.transition;
+        }
+      }
+    }
+  },
+
+  // 添加卡片框
+  _exhibitAddSlot() {
+    const cfg = this.getExhibitConfig();
+    const page = cfg.pages[this._exhibitEditPage];
+    if (!page) return;
+    const wrap = document.getElementById('wswCanvasWrap');
+    const ww = wrap ? wrap.clientWidth : 1000;
+    const wh = wrap ? wrap.clientHeight : 700;
+    const slot = {
+      id: 'slot_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      x: Math.round(ww / 2 - 200 + (page.slots.length * 20) % 100),
+      y: Math.round(wh / 2 - 150 + (page.slots.length * 20) % 80),
+      w: 400, h: 280,
+      cardId: null,
+      displayMode: 'fit',
+      transition: 'slide'
+    };
+    page.slots.push(slot);
+    this._renderExhibitEditPage();
+    this._exhibitSelectSlot(slot.id);
+  },
+
+  // 删除选中卡片框
+  _exhibitDelSlot() {
+    if (!this._exhibitEditSelectedSlot) { App.showToast('请先选中一个卡片框'); return; }
+    const cfg = this.getExhibitConfig();
+    const page = cfg.pages[this._exhibitEditPage];
+    page.slots = page.slots.filter(s => s.id !== this._exhibitEditSelectedSlot);
+    this._exhibitEditSelectedSlot = null;
+    this._renderExhibitEditPage();
+  },
+
+  // 设置选中框属性
+  _exhibitSetSlotProp(prop, value) {
+    if (!this._exhibitEditSelectedSlot) return;
+    const cfg = this.getExhibitConfig();
+    const page = cfg.pages[this._exhibitEditPage];
+    const slot = page.slots.find(s => s.id === this._exhibitEditSelectedSlot);
+    if (slot) {
+      slot[prop] = value;
+      // 更新标签
+      const el = document.querySelector('.wsw-exhibit-slot[data-slot-id="' + slot.id + '"] .wsw-exhibit-slot-mode');
+      if (el && prop === 'displayMode') el.textContent = this._displayModeLabel(value);
+    }
+  },
+
+  // 添加页
+  _exhibitAddPage() {
+    const cfg = this.getExhibitConfig();
+    cfg.pages.push({ name: '第 ' + (cfg.pages.length + 1) + ' 页', slots: [] });
+    this._exhibitEditPage = cfg.pages.length - 1;
+    this._renderExhibitEditPage();
+  },
+
+  // 删除当前页
+  _exhibitDelPage() {
+    const cfg = this.getExhibitConfig();
+    if (cfg.pages.length <= 1) { App.showToast('至少保留一页'); return; }
+    cfg.pages.splice(this._exhibitEditPage, 1);
+    this._exhibitEditPage = Math.max(0, this._exhibitEditPage - 1);
+    this._renderExhibitEditPage();
+  },
+
+  // 重命名页
+  _exhibitRenamePage(name) {
+    const cfg = this.getExhibitConfig();
+    const page = cfg.pages[this._exhibitEditPage];
+    if (page) page.name = name || ('第 ' + (this._exhibitEditPage + 1) + ' 页');
+  },
+
+  // 编辑模式翻页
+  _exhibitEditGotoPage(idx) {
+    const cfg = this.getExhibitConfig();
+    idx = Math.max(0, Math.min(cfg.pages.length - 1, idx));
+    if (idx === this._exhibitEditPage) return;
+    this._exhibitEditPage = idx;
+    this._exhibitEditSelectedSlot = null;
+    this._renderExhibitEditPage();
+    const nameInput = document.getElementById('eePageName');
+    if (nameInput) nameInput.value = cfg.pages[idx] ? cfg.pages[idx].name : '';
+  },
+
+  _updateExhibitEditPageInfo() {
+    const cfg = this.getExhibitConfig();
+    const info = document.getElementById('eePageInfo');
+    if (info) info.textContent = (this._exhibitEditPage + 1) + '/' + cfg.pages.length;
+  },
+
+  // 显示卡片选择器（双击 slot 时，带内容预览）
+  _showSlotCardPicker(slot) {
+    const overlay = document.createElement('div');
+    overlay.className = 'wsw-link-overlay';
+    const cards = this.state.doc.cards;
+    if (cards.length === 0) {
+      overlay.innerHTML = '<div class="wsw-link-panel" style="width:420px">' +
+        '<div class="wsw-link-header"><span>📦 选择卡片</span><button class="wsw-link-close">✕</button></div>' +
+        '<div class="wsw-link-body" style="padding:30px;text-align:center;color:var(--text2)">当前文档无卡片，请先用菜单栏"插入"添加卡片</div>' +
+        '<div class="wsw-link-footer"><button class="wsw-link-btn cancel-btn">关闭</button></div></div>';
+      document.body.appendChild(overlay);
+      const close = () => overlay.remove();
+      overlay.querySelector('.wsw-link-close').onclick = close;
+      overlay.querySelector('.cancel-btn').onclick = close;
+      return;
+    }
+    const typeIcon = (t) => {
+      const map = {
+        textbox:'📝', table:'📋', chartCard:'📊', htmlBlock:'🧩', metricCard:'📌',
+        gaugeCard:'🎛', statCard:'🔢', compareCard:'⚖️', funnelCard:'🔻', flowCard:'🔀',
+        progressCard:'📊', timelineCard:'📅', calloutCard:'💡', radarCard:'🎯',
+        videoContainer:'🎬', audioContainer:'🎵', textContainer:'📄', excelContainer:'📊',
+        aiworkflow:'🤖', qrcodeCard:'🔲', dividerCard:'➖', shape:'⬜'
+      };
+      return map[t] || '📄';
+    };
+    let listHTML = '';
+    cards.forEach(c => {
+      const sel = c.id === slot.cardId ? ' selected' : '';
+      const typeTag = this.cardTypeLabel(c.type);
+      const preview = this._getCardPreviewText(c);
+      listHTML += '<div class="wsw-picker-card' + sel + '" data-card-id="' + c.id + '">' +
+        '<span class="wsw-picker-card-icon">' + typeIcon(c.type) + '</span>' +
+        '<div class="wsw-picker-card-info">' +
+          '<div class="wsw-picker-card-name">' + this.esc(c.name || '未命名') + '</div>' +
+          '<div class="wsw-picker-card-type">' + typeTag + ' · ' + c.w + '×' + c.h + '</div>' +
+          '<div class="wsw-picker-card-preview">' + this.esc(preview) + '</div>' +
+        '</div>' +
+      '</div>';
+    });
+    overlay.innerHTML = '<div class="wsw-link-panel" style="width:640px;max-height:85vh">' +
+      '<div class="wsw-link-header"><span>📦 选择卡片放入此框（点击卡片选中）</span><button class="wsw-link-close">✕</button></div>' +
+      '<div class="wsw-link-body" style="overflow-y:auto;max-height:65vh"><div class="wsw-picker-grid">' + listHTML + '</div></div>' +
+      '<div class="wsw-link-footer">' +
+        '<button class="wsw-link-btn cancel-btn">取消</button>' +
+        '<button class="wsw-link-btn save-btn primary">确定</button>' +
+      '</div></div>';
+    document.body.appendChild(overlay);
+
+    let pickedCardId = slot.cardId;
+    const close = () => overlay.remove();
+    overlay.querySelector('.wsw-link-close').onclick = close;
+    overlay.querySelector('.cancel-btn').onclick = close;
+    overlay.querySelectorAll('.wsw-picker-card').forEach(el => {
+      el.onclick = () => {
+        overlay.querySelectorAll('.wsw-picker-card').forEach(e => e.classList.remove('selected'));
+        el.classList.add('selected');
+        pickedCardId = parseInt(el.dataset.cardId);
+      };
+      // 双击直接确定
+      el.ondblclick = () => {
+        pickedCardId = parseInt(el.dataset.cardId);
+        if (pickedCardId) {
+          slot.cardId = pickedCardId;
+          this._renderExhibitEditPage();
+          this._exhibitSelectSlot(slot.id);
+        }
+        close();
+      };
+    });
+    overlay.querySelector('.save-btn').onclick = () => {
+      if (pickedCardId) {
+        slot.cardId = pickedCardId;
+        this._renderExhibitEditPage();
+        this._exhibitSelectSlot(slot.id);
+      }
+      close();
+    };
+  },
+
+  // 退出展览编辑器
+  exitExhibitEditor(playMode) {
+    this._exhibitEditing = false;
+    if (this._exhibitEditKeyHandler) {
+      document.removeEventListener('keydown', this._exhibitEditKeyHandler);
+      this._exhibitEditKeyHandler = null;
+    }
+    const tb = document.getElementById('wswExhibitEditToolbar');
+    if (tb) tb.remove();
+    const layer = document.getElementById('wswExhibitEditLayer');
+    if (layer) layer.remove();
+    // 移除画布容器的编辑 class，恢复画布卡片显示
+    const wrap = document.getElementById('wswCanvasWrap');
+    if (wrap) wrap.classList.remove('exhibit-editing');
+
+    if (playMode) {
+      // 进入播放模式
+      this.enterExhibitionMode();
+    } else {
+      // 恢复标签栏
+      const tabBar = document.querySelector('.wsw-tab-bar');
+      if (tabBar) tabBar.style.display = '';
+      this.state.zoom = this._exhibitEditSavedZoom || 1;
+      this.state.panX = this._exhibitEditSavedPanX || 0;
+      this.state.panY = this._exhibitEditSavedPanY || 0;
+      this.applyTransform();
+      App.showToast('已退出展览编辑');
+    }
+  },
+
+  // ===== 展览模式（分页展示 + 方向性过渡 + 聚焦/弱化）=====
+  enterExhibitionMode() {
+    if (!this.state.doc || this.state.doc.cards.length === 0) {
+      App.showToast('当前文档无卡片，无法进入展览模式');
+      return;
+    }
+    if (this._exhibiting) return;
+    this._exhibiting = true;
+    this._exhibitAbort = false;
+    this._exhibitDirection = 1;  // 1=前进(下一页)，-1=后退(上一页)
+
+    // 检查是否有保存的展览配置
+    const cfg = this.state.doc.exhibitConfig;
+    const hasConfig = cfg && cfg.pages && cfg.pages.length > 0 && cfg.pages.some(p => p.slots && p.slots.length > 0);
+
+    const wrap = document.getElementById('wswCanvasWrap');
+    const ww = wrap.clientWidth;
+    const wh = wrap.clientHeight;
+    this._exhibitPageIndex = 0;
+    this._exhibitSavedZoom = this.state.zoom;
+    this._exhibitSavedPanX = this.state.panX;
+    this._exhibitSavedPanY = this.state.panY;
+
+    let pages;
+    if (hasConfig) {
+      // 配置模式：从 exhibitConfig 读取，每页的 slots 包含位置和 cardId
+      this._exhibitUseConfig = true;
+      pages = cfg.pages.map(page => {
+        // 把 slots 转换为卡片引用（保留 slot 的位置/尺寸/展示方式）
+        return page.slots.map(slot => {
+          const card = this.state.doc.cards.find(c => c.id === slot.cardId);
+          if (!card) return null;
+          // 用 slot 的位置/尺寸覆盖卡片，保留 cardId 和 displayMode
+          return {
+            id: card.id, type: card.type, name: card.name,
+            x: slot.x, y: slot.y, w: slot.w, h: slot.h,
+            _slotId: slot.id, _displayMode: slot.displayMode, _transition: slot.transition,
+            _origCard: card  // 保留原始卡片引用
+          };
+        }).filter(Boolean);
+      }).filter(p => p.length > 0);
+    } else {
+      // 自动模式：按阅读顺序分页
+      this._exhibitUseConfig = false;
+      const sortedCards = this.state.doc.cards.slice().sort((a, b) => {
+        const dy = (a.y + a.h / 2) - (b.y + b.h / 2);
+        if (Math.abs(dy) > 60) return dy;
+        return (a.x + a.w / 2) - (b.x + b.w / 2);
+      });
+      pages = this._paginateCards(sortedCards, ww, wh);
+    }
+    this._exhibitPages = pages;
+
+    // 2. 创建控制条
+    const ctrl = document.createElement('div');
+    ctrl.id = 'wswExhibitCtrl';
+    ctrl.innerHTML =
+      '<div class="wsw-exhibit-info">▦ 展览模式 · <span id="wswExhibitPage">1/' + pages.length + '</span></div>' +
+      '<div class="wsw-exhibit-progress"><div class="wsw-exhibit-progress-bar" id="wswExhibitBar"></div></div>' +
+      '<div class="wsw-exhibit-controls">' +
+        '<button id="wswExhibitOverview" title="页码概览">▦</button>' +
+        '<button id="wswExhibitPrev" title="上一页（←）">◀</button>' +
+        '<button id="wswExhibitAuto" title="自动播放">▶</button>' +
+        '<button id="wswExhibitNext" title="下一页（→）">▶</button>' +
+        '<button id="wswExhibitEdit" title="编辑当前页">✎</button>' +
+        '<button id="wswExhibitExit" title="退出（ESC）">✕</button>' +
+      '</div>';
+    document.body.appendChild(ctrl);
+
+    // 3. 创建侧边导航点
+    this._createExhibitSidebar(pages.length);
+
+    // 4. 创建底部标题浮层
+    const caption = document.createElement('div');
+    caption.id = 'wswExhibitCaption';
+    caption.className = 'wsw-exhibit-caption';
+    document.body.appendChild(caption);
+
+    const exitBtn = document.getElementById('wswExhibitExit');
+    const prevBtn = document.getElementById('wswExhibitPrev');
+    const nextBtn = document.getElementById('wswExhibitNext');
+    const autoBtn = document.getElementById('wswExhibitAuto');
+    const editBtn = document.getElementById('wswExhibitEdit');
+    const overviewBtn = document.getElementById('wswExhibitOverview');
+
+    exitBtn.onclick = () => this.exitExhibitionMode();
+    prevBtn.onclick = () => { this._exhibitDirection = -1; this._exhibitGotoPage(this._exhibitPageIndex - 1); };
+    nextBtn.onclick = () => { this._exhibitDirection = 1; this._exhibitGotoPage(this._exhibitPageIndex + 1); };
+    autoBtn.onclick = () => this._toggleExhibitAuto();
+    editBtn.onclick = () => this._exhibitEditCurrentPage();
+    overviewBtn.onclick = () => this._showExhibitOverview();
+
+    this._exhibitAuto = false;
+
+    document.addEventListener('keydown', this._exhibitKeyHandler = (e) => {
+      if (e.key === 'Escape') {
+        if (document.getElementById('wswExhibitOverviewPanel')) this._hideExhibitOverview();
+        else this.exitExhibitionMode();
+      }
+      else if (e.key === 'ArrowLeft') { this._exhibitDirection = -1; prevBtn.click(); }
+      else if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); this._exhibitDirection = 1; nextBtn.click(); }
+    });
+
+    // 隐藏工具栏/标签栏（让画布全屏）
+    const toolbar = document.querySelector('.wsw-toolbar');
+    const tabBar = document.querySelector('.wsw-tab-bar');
+    if (toolbar) toolbar.style.display = 'none';
+    if (tabBar) tabBar.style.display = 'none';
+
+    // 5. 先显示概览面板（建立认知），点击后进入第一页
+    this._showExhibitOverview(true);
+  },
+
+  // 创建侧边导航点
+  _createExhibitSidebar(pageCount) {
+    const sidebar = document.createElement('div');
+    sidebar.id = 'wswExhibitSidebar';
+    sidebar.className = 'wsw-exhibit-sidebar';
+    for (let i = 0; i < pageCount; i++) {
+      const dot = document.createElement('div');
+      dot.className = 'wsw-exhibit-sidebar-dot' + (i === 0 ? ' current' : '');
+      dot.title = '第 ' + (i + 1) + ' 页';
+      dot.onclick = () => {
+        this._exhibitDirection = (i > this._exhibitPageIndex) ? 1 : -1;
+        this._exhibitGotoPage(i);
+      };
+      sidebar.appendChild(dot);
+    }
+    document.body.appendChild(sidebar);
+  },
+
+  // 更新侧边导航点高亮
+  _updateExhibitSidebar(pageIndex) {
+    const sidebar = document.getElementById('wswExhibitSidebar');
+    if (!sidebar) return;
+    sidebar.querySelectorAll('.wsw-exhibit-sidebar-dot').forEach((dot, i) => {
+      dot.classList.toggle('current', i === pageIndex);
+    });
+  },
+
+  // 显示标题浮层（当前页主卡片名称）
+  _showExhibitCaption(pageIndex) {
+    const caption = document.getElementById('wswExhibitCaption');
+    if (!caption) return;
+    const pageCards = this._exhibitPages[pageIndex] || [];
+    // 找本页面积最大的卡片作为主卡片
+    let mainCard = null;
+    let maxArea = 0;
+    pageCards.forEach(c => {
+      const area = c.w * c.h;
+      if (area > maxArea) { maxArea = area; mainCard = c; }
+    });
+    const mainName = mainCard ? (mainCard.name || this.cardTypeLabel(mainCard.type)) : '';
+    const typeLabel = mainCard ? this.cardTypeLabel(mainCard.type) : '';
+    caption.innerHTML = '<div class="caption-label">第 ' + (pageIndex + 1) + ' 页 · ' + typeLabel + '</div>' + this.esc(mainName);
+    caption.classList.add('show');
+    clearTimeout(this._exhibitCaptionTimer);
+    this._exhibitCaptionTimer = setTimeout(() => caption.classList.remove('show'), 3000);
+  },
+
+  // 显示概览面板（所有页缩略图）
+  _showExhibitOverview(isInitial) {
+    if (document.getElementById('wswExhibitOverviewPanel')) return;
+    const pages = this._exhibitPages;
+    const panel = document.createElement('div');
+    panel.id = 'wswExhibitOverviewPanel';
+    panel.className = 'wsw-exhibit-overview';
+    let gridHtml = '';
+    pages.forEach((pageCards, i) => {
+      // 计算缩略图内的迷你卡片位置
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      pageCards.forEach(c => {
+        minX = Math.min(minX, c.x); minY = Math.min(minY, c.y);
+        maxX = Math.max(maxX, c.x + c.w); maxY = Math.max(maxY, c.y + c.h);
+      });
+      const cw = maxX - minX || 1, ch = maxY - minY || 1;
+      const miniCards = pageCards.map(c => {
+        const mx = ((c.x - minX) / cw) * 100;
+        const my = ((c.y - minY) / ch) * 100;
+        const mw = (c.w / cw) * 100;
+        const mh = (c.h / ch) * 100;
+        return '<div class="mini-card" style="left:' + mx + '%;top:' + my + '%;width:' + mw + '%;height:' + mh + '%"></div>';
+      }).join('');
+      const currentClass = (i === this._exhibitPageIndex) ? ' current' : '';
+      gridHtml += '<div class="wsw-exhibit-overview-page' + currentClass + '" data-page="' + i + '">' +
+        '<div class="wsw-exhibit-overview-page-num">第 ' + (i + 1) + ' 页 · ' + pageCards.length + ' 卡片</div>' +
+        '<div class="wsw-exhibit-overview-page-thumb">' + miniCards + '</div>' +
+      '</div>';
+    });
+    panel.innerHTML = '<h2>▦ 展览概览 · 共 ' + pages.length + ' 页</h2>' +
+      '<div class="wsw-exhibit-overview-grid">' + gridHtml + '</div>' +
+      (isInitial ? '<div style="color:#888;font-size:12px">点击页码开始浏览 · ESC 退出</div>' : '');
+    document.body.appendChild(panel);
+    panel.querySelectorAll('.wsw-exhibit-overview-page').forEach(el => {
+      el.onclick = () => {
+        const idx = parseInt(el.dataset.page);
+        this._hideExhibitOverview();
+        this._exhibitDirection = (idx > this._exhibitPageIndex) ? 1 : -1;
+        if (isInitial) {
+          // 首次进入：直接渲染第一页或所选页
+          this._renderExhibitPage(idx, true);
+          App.showToast('进入展览模式 · ←/→ 翻页 · ESC 退出');
+        } else {
+          this._exhibitGotoPage(idx);
+        }
+      };
+    });
+  },
+
+  _hideExhibitOverview() {
+    const panel = document.getElementById('wswExhibitOverviewPanel');
+    if (panel) panel.remove();
+  },
+
+  // 分页算法：贪心装填，确保每页在 85-110% 缩放下能铺满视口
+  _paginateCards(sortedCards, ww, wh) {
+    if (sortedCards.length === 0) return [];
+    const MARGIN = 40;
+    const MIN_ZOOM = 0.85;
+    const availW = ww - MARGIN * 2;
+    const availH = wh - MARGIN * 2;
+    const pages = [];
+    let currentPage = [];
+    let bounds = null;
+
+    for (const card of sortedCards) {
+      const trial = bounds
+        ? {
+            minX: Math.min(bounds.minX, card.x),
+            minY: Math.min(bounds.minY, card.y),
+            maxX: Math.max(bounds.maxX, card.x + card.w),
+            maxY: Math.max(bounds.maxY, card.y + card.h)
+          }
+        : { minX: card.x, minY: card.y, maxX: card.x + card.w, maxY: card.y + card.h };
+      const contentW = trial.maxX - trial.minX;
+      const contentH = trial.maxY - trial.minY;
+      // 计算能装下的最大缩放（取宽高更限制的那个）
+      const fitZoom = Math.min(availW / contentW, availH / contentH);
+      // 若 85% 能装下，则加入当前页
+      if (fitZoom >= MIN_ZOOM) {
+        currentPage.push(card);
+        bounds = trial;
+      } else {
+        // 85% 都装不下，分页
+        if (currentPage.length > 0) pages.push(currentPage);
+        currentPage = [card];
+        bounds = { minX: card.x, minY: card.y, maxX: card.x + card.w, maxY: card.y + card.h };
+      }
+    }
+    if (currentPage.length > 0) pages.push(currentPage);
+    return pages;
+  },
+
+  // 渲染指定页（带方向性过渡动画 + 聚焦/弱化）
+  _renderExhibitPage(pageIndex, withAnimation) {
+    const pages = this._exhibitPages;
+    if (pageIndex < 0 || pageIndex >= pages.length) return;
+    const wrap = document.getElementById('wswCanvasWrap');
+    if (!wrap) return;
+    const ww = wrap.clientWidth;
+    const wh = wrap.clientHeight;
+    const pageCards = pages[pageIndex];
+
+    // 更新进度条和页码
+    const bar = document.getElementById('wswExhibitBar');
+    if (bar) bar.style.width = ((pageIndex + 1) / pages.length * 100) + '%';
+    const pageLabel = document.getElementById('wswExhibitPage');
+    if (pageLabel) pageLabel.textContent = (pageIndex + 1) + '/' + pages.length;
+    this._updateExhibitSidebar(pageIndex);
+
+    if (this._exhibitUseConfig) {
+      // 配置模式：按 slot 位置直接渲染卡片，zoom=1, pan=0
+      if (withAnimation) {
+        this._animateConfigTransition(pageIndex);
+      } else {
+        this._renderConfigPage(pageIndex);
+      }
+    } else {
+      // 自动模式：计算缩放和 pan
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      pageCards.forEach(c => {
+        minX = Math.min(minX, c.x); minY = Math.min(minY, c.y);
+        maxX = Math.max(maxX, c.x + c.w); maxY = Math.max(maxY, c.y + c.h);
+      });
+      const contentW = maxX - minX;
+      const contentH = maxY - minY;
+      const MARGIN = 40;
+      const availW = ww - MARGIN * 2;
+      const availH = wh - MARGIN * 2;
+      const fitZoom = Math.min(availW / contentW, availH / contentH);
+      const targetZoom = Math.max(0.85, Math.min(1.10, fitZoom));
+      const targetPanX = (ww - contentW * targetZoom) / 2 - minX * targetZoom;
+      const targetPanY = (wh - contentH * targetZoom) / 2 - minY * targetZoom;
+
+      if (withAnimation) {
+        this._animateDirectionalTransition(targetZoom, targetPanX, targetPanY, pageIndex);
+      } else {
+        this.state.zoom = targetZoom;
+        this.state.panX = targetPanX;
+        this.state.panY = targetPanY;
+        document.getElementById('wswZoomDisplay').textContent = Math.round(this.state.zoom * 100) + '%';
+        this.applyTransform();
+        this._applyExhibitFocus(pageIndex);
+      }
+    }
+    this._exhibitPageIndex = pageIndex;
+    this._showExhibitCaption(pageIndex);
+  },
+
+  // 配置模式：渲染一页（在画布上按 slot 位置放置卡片）
+  _renderConfigPage(pageIndex) {
+    const pageCards = this._exhibitPages[pageIndex];
+    const inner = document.getElementById('wswCanvasInner');
+    if (!inner) return;
+    // 清空旧卡片
+    inner.querySelectorAll('.wsw-card').forEach(el => el.remove());
+    // 重置缩放
+    this.state.zoom = 1;
+    this.state.panX = 0;
+    this.state.panY = 0;
+    this.applyTransform();
+    // 为每个 slot 创建卡片元素
+    pageCards.forEach(slotCard => {
+      const origCard = slotCard._origCard || slotCard;
+      const el = this.createCardElement(origCard);
+      // 覆盖位置和尺寸为 slot 的值
+      el.style.left = slotCard.x + 'px';
+      el.style.top = slotCard.y + 'px';
+      el.style.width = slotCard.w + 'px';
+      el.style.height = slotCard.h + 'px';
+      el.style.zIndex = '1';
+      // 应用展示方式
+      el.dataset.displayMode = slotCard._displayMode || 'fit';
+      el.classList.add('exhibit-slot-card');
+      inner.appendChild(el);
+    });
+    // 重新应用聚焦
+    this._applyExhibitFocus(pageIndex);
+    // 初始化图表卡片
+    setTimeout(() => this._renderCharts(), 50);
+  },
+
+  // 配置模式过渡动画
+  _animateConfigTransition(pageIndex) {
+    const inner = document.getElementById('wswCanvasInner');
+    if (!inner) return;
+    const dir = this._exhibitDirection || 1;
+    const slideDist = 500;
+    const oldCards = inner.querySelectorAll('.wsw-card');
+    // 旧卡片滑出
+    oldCards.forEach((el) => {
+      el.style.transition = 'transform 0.4s cubic-bezier(0.4,0,0.6,1), opacity 0.35s ease-out';
+      el.style.transform = 'translate(' + (-dir * slideDist) + 'px,0) scale(0.8)';
+      el.style.opacity = '0';
+    });
+    setTimeout(() => {
+      // 切换到新页
+      this._renderConfigPage(pageIndex);
+      const newCards = inner.querySelectorAll('.wsw-card');
+      newCards.forEach((el) => {
+        el.style.transition = 'none';
+        el.style.transform = 'translate(' + (dir * slideDist) + 'px,0) scale(0.8)';
+        el.style.opacity = '0';
+      });
+      void inner.offsetWidth;
+      newCards.forEach((el) => {
+        el.style.transition = 'transform 0.5s cubic-bezier(0.34,1.56,0.64,1), opacity 0.4s ease-in';
+        el.style.transform = 'translate(0,0) scale(1)';
+        el.style.opacity = '1';
+      });
+      setTimeout(() => {
+        newCards.forEach((el) => {
+          el.style.transition = '';
+          el.style.transform = '';
+          el.style.opacity = '';
+        });
+        this._applyExhibitFocus(pageIndex);
+      }, 550);
+    }, 420);
+  },
+
+  // 方向性过渡动画：前进时旧卡片向左滑出、新卡片从右滑入；后退反之
+  _animateDirectionalTransition(targetZoom, targetPanX, targetPanY, pageIndex) {
+    const inner = document.getElementById('wswCanvasInner');
+    if (!inner) return;
+    const dir = this._exhibitDirection || 1;
+    const slideDist = 400;
+    const oldCards = inner.querySelectorAll('.wsw-card');
+    // 第一阶段：旧卡片向翻页反方向滑出 + fade out
+    oldCards.forEach((el) => {
+      el.style.transition = 'transform 0.45s cubic-bezier(0.4, 0, 0.6, 1), opacity 0.4s ease-out';
+      el.style.transform = 'translate(' + (-dir * slideDist) + 'px, 0) scale(0.85)';
+      el.style.opacity = '0';
+    });
+    // 第二阶段（450ms 后）：切换视图，新卡片从翻页方向滑入
+    setTimeout(() => {
+      this.state.zoom = targetZoom;
+      this.state.panX = targetPanX;
+      this.state.panY = targetPanY;
+      document.getElementById('wswZoomDisplay').textContent = Math.round(this.state.zoom * 100) + '%';
+      this.applyTransform();
+      // 重新查询卡片（视图已切换到新页）
+      const newCards = inner.querySelectorAll('.wsw-card');
+      newCards.forEach((el) => {
+        // 初始状态：从翻页方向外侧进入
+        el.style.transition = 'none';
+        el.style.transform = 'translate(' + (dir * slideDist) + 'px, 0) scale(0.85)';
+        el.style.opacity = '0';
+      });
+      // 触发 reflow
+      void inner.offsetWidth;
+      // 滑入到目标位置
+      newCards.forEach((el) => {
+        el.style.transition = 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.4s ease-in';
+        el.style.transform = 'translate(0,0) scale(1)';
+        el.style.opacity = '1';
+      });
+      // 动画完成后清除 inline style + 应用聚焦/弱化
+      setTimeout(() => {
+        newCards.forEach((el) => {
+          el.style.transition = '';
+          el.style.transform = '';
+          el.style.opacity = '';
+        });
+        this._applyExhibitFocus(pageIndex);
+      }, 550);
+    }, 450);
+  },
+
+  // 聚焦/弱化：本页面积最大的卡片 focused，其他 dimmed
+  _applyExhibitFocus(pageIndex) {
+    const inner = document.getElementById('wswCanvasInner');
+    if (!inner) return;
+    const pageCards = this._exhibitPages[pageIndex] || [];
+    if (pageCards.length <= 1) return;  // 单卡片不弱化
+    // 找面积最大的卡片作为焦点
+    let mainId = null;
+    let maxArea = 0;
+    pageCards.forEach(c => {
+      const area = c.w * c.h;
+      if (area > maxArea) { maxArea = area; mainId = c.id; }
+    });
+    inner.querySelectorAll('.wsw-card').forEach(el => {
+      const cardId = parseInt(el.dataset.cardId);
+      el.classList.remove('focused', 'dimmed');
+      if (cardId === mainId) el.classList.add('focused');
+      else el.classList.add('dimmed');
+    });
+  },
+
+  _exhibitGotoPage(idx) {
+    if (!this._exhibitPages) return;
+    idx = Math.max(0, Math.min(this._exhibitPages.length - 1, idx));
+    if (idx === this._exhibitPageIndex) return;
+    this._renderExhibitPage(idx, true);
+  },
+
+  _toggleExhibitAuto() {
+    this._exhibitAuto = !this._exhibitAuto;
+    const autoBtn = document.getElementById('wswExhibitAuto');
+    if (autoBtn) autoBtn.textContent = this._exhibitAuto ? '⏸' : '▶';
+    if (this._exhibitAuto) {
+      this._exhibitAutoTimer = setInterval(() => {
+        const next = this._exhibitPageIndex + 1;
+        if (next >= this._exhibitPages.length) {
+          this._toggleExhibitAuto(); // 到末页停止
+          return;
+        }
+        this._exhibitGotoPage(next);
+      }, 5000);
+    } else {
+      if (this._exhibitAutoTimer) { clearInterval(this._exhibitAutoTimer); this._exhibitAutoTimer = null; }
+    }
+  },
+
+  // 编辑当前页：退出播放，进入展览编辑器
+  _exhibitEditCurrentPage() {
+    this._exhibitAbort = true;
+    if (this._exhibitAutoTimer) clearInterval(this._exhibitAutoTimer);
+    if (this._exhibitKeyHandler) document.removeEventListener('keydown', this._exhibitKeyHandler);
+    const ctrl = document.getElementById('wswExhibitCtrl');
+    if (ctrl) ctrl.remove();
+    this._hideExhibitOverview();
+    const sidebar = document.getElementById('wswExhibitSidebar');
+    if (sidebar) sidebar.remove();
+    const caption = document.getElementById('wswExhibitCaption');
+    if (caption) caption.remove();
+    // 清除聚焦/弱化状态
+    const inner0 = document.getElementById('wswCanvasInner');
+    if (inner0) inner0.querySelectorAll('.wsw-card').forEach(el => el.classList.remove('focused', 'dimmed'));
+    this._exhibiting = false;
+    // 进入展览编辑器（跳到当前页）
+    this._exhibitEditing = false;  // 确保状态重置
+    this.enterExhibitEditor();
+    // 跳到刚才查看的页
+    if (this._exhibitPageIndex !== undefined) {
+      this._exhibitEditPage = this._exhibitPageIndex;
+      this._renderExhibitEditPage();
+      const cfg = this.getExhibitConfig();
+      const nameInput = document.getElementById('eePageName');
+      if (nameInput && cfg.pages[this._exhibitEditPage]) nameInput.value = cfg.pages[this._exhibitEditPage].name;
+    }
+  },
+
+  exitExhibitionMode() {
+    if (!this._exhibiting) return;
+    this._exhibiting = false;
+    this._exhibitAbort = true;
+    if (this._exhibitAutoTimer) clearInterval(this._exhibitAutoTimer);
+    if (this._exhibitCaptionTimer) clearTimeout(this._exhibitCaptionTimer);
+    if (this._exhibitKeyHandler) document.removeEventListener('keydown', this._exhibitKeyHandler);
+    const ctrl = document.getElementById('wswExhibitCtrl');
+    if (ctrl) ctrl.remove();
+    this._hideExhibitOverview();
+    const sidebar = document.getElementById('wswExhibitSidebar');
+    if (sidebar) sidebar.remove();
+    const caption = document.getElementById('wswExhibitCaption');
+    if (caption) caption.remove();
+    // 恢复工具栏/标签栏
+    const toolbar = document.querySelector('.wsw-toolbar');
+    const tabBar = document.querySelector('.wsw-tab-bar');
+    if (toolbar) toolbar.style.display = '';
+    if (tabBar) tabBar.style.display = '';
+    if (this._exhibitUseConfig) {
+      // 配置模式：清除临时渲染的卡片，重新渲染原始画布
+      const inner = document.getElementById('wswCanvasInner');
+      if (inner) inner.querySelectorAll('.wsw-card').forEach(el => el.remove());
+      this.state.zoom = this._exhibitSavedZoom !== undefined ? this._exhibitSavedZoom : 1;
+      this.state.panX = this._exhibitSavedPanX !== undefined ? this._exhibitSavedPanX : 0;
+      this.state.panY = this._exhibitSavedPanY !== undefined ? this._exhibitSavedPanY : 0;
+      document.getElementById('wswZoomDisplay').textContent = Math.round(this.state.zoom * 100) + '%';
+      this.applyTransform();
+      // 重新渲染所有卡片
+      if (this.state.doc) {
+        this.state.doc.cards.forEach(card => {
+          const el = this.createCardElement(card);
+          inner.appendChild(el);
+        });
+      }
+    } else {
+      // 自动模式：恢复视图
+      if (this._exhibitSavedZoom !== undefined) {
+        this.state.zoom = this._exhibitSavedZoom;
+        this.state.panX = this._exhibitSavedPanX;
+        this.state.panY = this._exhibitSavedPanY;
+        document.getElementById('wswZoomDisplay').textContent = Math.round(this.state.zoom * 100) + '%';
+        this.applyTransform();
+      }
+      const inner = document.getElementById('wswCanvasInner');
+      if (inner) {
+        inner.querySelectorAll('.wsw-card').forEach(el => {
+          el.style.transition = '';
+          el.style.transform = '';
+          el.style.opacity = '';
+          el.classList.remove('focused', 'dimmed');
+        });
+      }
+    }
+    App.showToast('已退出展览模式');
   },
 
   // ===== 全局TTL设置 =====
@@ -363,6 +1936,358 @@ const WSWEditor = {
       // 重新渲染以更新状态显示
       this.renderCanvas();
     });
+  },
+
+  // ===== 文档模板系统 =====
+  // ===== 用户模板管理 =====
+  getUserTemplates() {
+    try {
+      const raw = localStorage.getItem('wsw_user_templates');
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) { return {}; }
+  },
+
+  saveUserTemplate(key, template) {
+    const all = this.getUserTemplates();
+    all[key] = template;
+    try { localStorage.setItem('wsw_user_templates', JSON.stringify(all)); } catch (e) {}
+  },
+
+  deleteUserTemplate(key) {
+    const all = this.getUserTemplates();
+    delete all[key];
+    try { localStorage.setItem('wsw_user_templates', JSON.stringify(all)); } catch (e) {}
+  },
+
+  // 另存为模板：把当前文档存为用户模板
+  saveCurrentAsTemplate() {
+    if (!this.state.doc || this.state.doc.cards.length === 0) {
+      App.showToast('当前文档为空，无法保存为模板');
+      return;
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'wsw-link-overlay';
+    overlay.innerHTML = '<div class="wsw-link-panel" style="width:420px">' +
+      '<div class="wsw-link-header"><span>💾 另存为模板</span><button class="wsw-link-close">✕</button></div>' +
+      '<div class="wsw-link-body">' +
+        '<div class="wsw-link-section"><label class="wsw-link-label">模板名称</label>' +
+          '<input type="text" id="tplNameInput" class="wsw-link-input" placeholder="例如：销售数据月报" style="width:100%"></div>' +
+        '<div class="wsw-link-section"><label class="wsw-link-label">分类</label>' +
+          '<select id="tplCatSelect" class="wsw-link-select"><option>行业报告</option><option>数据分析</option><option>基础模板</option><option>我的模板</option></select></div>' +
+        '<div class="wsw-link-section"><label class="wsw-link-label">描述</label>' +
+          '<textarea id="tplDescInput" class="wsw-link-input" placeholder="模板描述..." style="width:100%;min-height:60px"></textarea></div>' +
+        '<div class="wsw-link-section"><label class="wsw-link-label">图标</label>' +
+          '<input type="text" id="tplIconInput" class="wsw-link-input" value="📄" style="width:60px;text-align:center"></div>' +
+      '</div>' +
+      '<div class="wsw-link-footer">' +
+        '<button class="wsw-link-btn cancel-btn">取消</button>' +
+        '<button class="wsw-link-btn save-btn primary">保存</button>' +
+      '</div>' +
+    '</div>';
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('.wsw-link-close').onclick = close;
+    overlay.querySelector('.cancel-btn').onclick = close;
+    overlay.querySelector('.save-btn').onclick = () => {
+      const name = document.getElementById('tplNameInput').value.trim() || '未命名模板';
+      const cat = document.getElementById('tplCatSelect').value;
+      const desc = document.getElementById('tplDescInput').value.trim();
+      const icon = document.getElementById('tplIconInput').value.trim() || '📄';
+      // 深拷贝当前文档
+      const docCopy = JSON.parse(JSON.stringify(this.state.doc));
+      // 重生卡片 ID
+      let idCounter = Date.now();
+      docCopy.cards.forEach(c => { c.id = idCounter++; });
+      const key = 'user_' + Date.now();
+      this.saveUserTemplate(key, {
+        name: name, icon: icon, category: cat, description: desc,
+        doc: docCopy, isUserTemplate: true
+      });
+      close();
+      App.showToast('模板已保存：' + name);
+    };
+  },
+
+  showTemplatePanel() {
+    // 移除已有面板
+    const existing = document.getElementById('wswTemplatePanel');
+    if (existing) { existing.remove(); return; }
+
+    const builtin = (typeof WSW_TEMPLATES !== 'undefined') ? WSW_TEMPLATES : {};
+    const user = this.getUserTemplates();
+    // 合并内置和用户模板
+    const templates = { ...builtin, ...user };
+    const keys = Object.keys(templates);
+    if (keys.length === 0) {
+      App.showToast('未找到可用模板');
+      return;
+    }
+
+    // 按 category 分组
+    const groups = {};
+    keys.forEach(k => {
+      const t = templates[k];
+      const cat = t.category || '其他';
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push({ key: k, ...t });
+    });
+
+    const panel = document.createElement('div');
+    panel.id = 'wswTemplatePanel';
+    panel.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;font-family:"Microsoft YaHei",sans-serif;';
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:var(--surface,#16162a);border:1px solid var(--border,#2a2a45);border-radius:12px;width:780px;max-width:92vw;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden;';
+
+    // 头部
+    const header = document.createElement('div');
+    header.style.cssText = 'padding:18px 24px;border-bottom:1px solid var(--border,#2a2a45);display:flex;justify-content:space-between;align-items:center;flex-shrink:0;';
+    header.innerHTML = '<div style="font-size:16px;font-weight:700;color:var(--text,#e0e0ee);">📋 文档模板库</div>';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'background:none;border:none;color:var(--text2,#8888a8);font-size:18px;cursor:pointer;padding:4px 8px;border-radius:4px;';
+    closeBtn.onclick = () => panel.remove();
+    closeBtn.onmouseover = () => closeBtn.style.color = 'var(--danger,#ef5350)';
+    closeBtn.onmouseout = () => closeBtn.style.color = 'var(--text2,#8888a8)';
+    header.appendChild(closeBtn);
+    dialog.appendChild(header);
+
+    // 内容区
+    const content = document.createElement('div');
+    content.style.cssText = 'padding:20px 24px;overflow-y:auto;flex:1;';
+
+    Object.keys(groups).forEach(cat => {
+      const groupTitle = document.createElement('div');
+      groupTitle.style.cssText = 'font-size:12px;color:var(--accent,#b39ddb);font-weight:700;margin:6px 0 12px 0;letter-spacing:1px;text-transform:uppercase;';
+      groupTitle.textContent = '📁 ' + cat;
+      content.appendChild(groupTitle);
+
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:18px;';
+
+      groups[cat].forEach(t => {
+        const card = document.createElement('div');
+        card.style.cssText = 'background:var(--surface2,#1e1e35);border:1px solid var(--border,#2a2a45);border-radius:8px;padding:14px;cursor:pointer;transition:all 0.2s;position:relative;';
+        card.onmouseover = () => { card.style.borderColor = 'var(--primary,#4fc3f7)'; card.style.transform = 'translateY(-2px)'; };
+        card.onmouseout = () => { card.style.borderColor = 'var(--border,#2a2a45)'; card.style.transform = 'translateY(0)'; };
+
+        const cardCount = (t.doc && t.doc.cards) ? t.doc.cards.length : 0;
+        const isUser = !!t.isUserTemplate;
+        const userBadge = isUser
+          ? '<span style="font-size:9px;background:var(--success,#4dd0c8);color:#0f0f1a;padding:1px 5px;border-radius:3px;margin-left:6px;">自定义</span>'
+          : '<span style="font-size:9px;background:var(--surface,#333);color:var(--text2,#8888a8);padding:1px 5px;border-radius:3px;margin-left:6px;border:1px solid var(--border,#444);">内置</span>';
+        // 所有模板都显示删除按钮：用户模板可删，内置模板点击提示不可删
+        const deleteBtn = isUser
+          ? '<button class="tpl-delete" data-key="' + t.key + '" data-builtin="0" title="删除模板" style="position:absolute;top:10px;right:10px;width:22px;height:22px;background:rgba(239,83,80,0.15);color:var(--danger,#ef5350);border:1px solid rgba(239,83,80,0.3);border-radius:4px;cursor:pointer;font-size:11px;">✕</button>'
+          : '<button class="tpl-delete" data-key="' + t.key + '" data-builtin="1" title="内置模板不可删除" style="position:absolute;top:10px;right:10px;width:22px;height:22px;background:rgba(136,136,168,0.1);color:var(--text2,#8888a8);border:1px solid var(--border,#444);border-radius:4px;cursor:not-allowed;font-size:11px;opacity:0.5;">✕</button>';
+
+        card.innerHTML =
+          deleteBtn +
+          '<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;">' +
+            '<div style="font-size:24px;flex-shrink:0;">' + (t.icon || '📄') + '</div>' +
+            '<div style="flex:1;min-width:0;">' +
+              '<div style="font-size:13px;font-weight:600;color:var(--text,#e0e0ee);margin-bottom:3px;">' + this.esc(t.name || t.key) + userBadge + '</div>' +
+              '<div style="font-size:10px;color:var(--text2,#8888a8);">' + cardCount + ' 个卡片</div>' +
+            '</div>' +
+          '</div>' +
+          '<div style="font-size:11px;color:var(--text2,#8888a8);line-height:1.5;margin-bottom:10px;max-height:54px;overflow:hidden;">' + this.esc(t.description || '') + '</div>' +
+          '<div style="display:flex;gap:6px;">' +
+            '<button class="tpl-apply" data-key="' + t.key + '" style="flex:1;padding:6px 10px;background:var(--primary,#4fc3f7);color:var(--bg,#0f0f1a);border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;">应用模板</button>' +
+            '<button class="tpl-preview" data-key="' + t.key + '" style="padding:6px 10px;background:transparent;color:var(--text2,#8888a8);border:1px solid var(--border,#2a2a45);border-radius:4px;font-size:11px;cursor:pointer;">预览</button>' +
+          '</div>';
+        grid.appendChild(card);
+      });
+
+      content.appendChild(grid);
+    });
+
+    // 应用 / 预览 / 删除 事件委托
+    content.addEventListener('click', (e) => {
+      const applyBtn = e.target.closest('.tpl-apply');
+      const previewBtn = e.target.closest('.tpl-preview');
+      const deleteBtn = e.target.closest('.tpl-delete');
+      if (deleteBtn) {
+        e.stopPropagation();
+        const key = deleteBtn.getAttribute('data-key');
+        const isBuiltin = deleteBtn.getAttribute('data-builtin') === '1';
+        if (isBuiltin) {
+          App.showToast('内置模板不可删除');
+          return;
+        }
+        const t = templates[key];
+        if (confirm('确定删除模板「' + (t.name || key) + '」？')) {
+          this.deleteUserTemplate(key);
+          panel.remove();
+          this.showTemplatePanel();
+          App.showToast('模板已删除');
+        }
+      } else if (applyBtn) {
+        const key = applyBtn.getAttribute('data-key');
+        panel.remove();
+        this.applyDocumentTemplate(key);
+      } else if (previewBtn) {
+        const key = previewBtn.getAttribute('data-key');
+        this.previewTemplate(key);
+      }
+    });
+
+    dialog.appendChild(content);
+
+    // 底部：另存为 + 说明
+    const footer = document.createElement('div');
+    footer.style.cssText = 'padding:12px 24px;border-top:1px solid var(--border,#2a2a45);font-size:11px;color:var(--text2,#8888a8);flex-shrink:0;display:flex;justify-content:space-between;align-items:center;gap:10px;';
+    footer.innerHTML = '<span>💡 应用模板在新标签页打开，不影响当前文档。「自定义」标签可删除</span>';
+    const saveAsBtn = document.createElement('button');
+    saveAsBtn.textContent = '💾 另存为模板';
+    saveAsBtn.style.cssText = 'padding:7px 14px;background:var(--accent,#b39ddb);color:#fff;border:none;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;';
+    saveAsBtn.onclick = () => {
+      panel.remove();
+      this.saveCurrentAsTemplate();
+    };
+    footer.appendChild(saveAsBtn);
+    dialog.appendChild(footer);
+
+    panel.appendChild(dialog);
+    panel.addEventListener('click', (e) => { if (e.target === panel) panel.remove(); });
+    document.body.appendChild(panel);
+  },
+
+  applyDocumentTemplate(templateKey) {
+    const builtin = (typeof WSW_TEMPLATES !== 'undefined') ? WSW_TEMPLATES : {};
+    const user = this.getUserTemplates();
+    const templates = { ...builtin, ...user };
+    const tpl = templates[templateKey];
+    if (!tpl || !tpl.doc) {
+      App.showToast('模板不存在: ' + templateKey);
+      return;
+    }
+
+    // 深拷贝模板文档
+    const docCopy = JSON.parse(JSON.stringify(tpl.doc));
+    // 重置时间戳
+    const now = Date.now();
+    if (!docCopy.globalTimestamp) docCopy.globalTimestamp = {};
+    docCopy.globalTimestamp.created = now;
+    docCopy.globalTimestamp.modified = now;
+    docCopy.globalTimestamp.timezone = 'Asia/Shanghai';
+    // 重新生成所有卡片 ID，避免与现有标签页冲突
+    if (Array.isArray(docCopy.cards)) {
+      let idCounter = 1;
+      const idMap = {};
+      docCopy.cards.forEach(c => {
+        const newId = now + idCounter++;
+        idMap[c.id] = newId;
+        c.id = newId;
+      });
+      // 修复 chartCard 的 sourceCardId 引用
+      docCopy.cards.forEach(c => {
+        if (c.type === 'chartCard' && c.sourceCardId && idMap[c.sourceCardId]) {
+          c.sourceCardId = idMap[c.sourceCardId];
+        }
+      });
+      // 重新计算 maxZ
+      const maxZ = docCopy.cards.reduce((m, c) => Math.max(m, c.z || 0), 0);
+      // 在新标签页中打开
+      const tabId = 'tab_' + now;
+      const tab = {
+        id: tabId,
+        doc: docCopy,
+        zoom: 1, panX: 0, panY: 0,
+        maxZ: maxZ + 1,
+        showGrid: docCopy.showGrid !== undefined ? docCopy.showGrid : true
+      };
+      this.state.tabs.push(tab);
+      this.switchTab(tabId);
+      this.renderTabs();
+      // 切换到 HT 编辑器模块（如果不在）
+      if (typeof App !== 'undefined' && App.switchModule) {
+        App.switchModule('wsw');
+      }
+      // 渲染所有图表（确保 inlineData 模式下立即绘制）
+      setTimeout(() => {
+        if (docCopy.cards) {
+          docCopy.cards.forEach(c => {
+            if (c.type === 'chartCard') {
+              this._renderChartCardCanvas(c);
+            }
+          });
+        }
+        this.fitView();
+      }, 100);
+      App.showToast('已应用模板：' + (tpl.name || templateKey));
+    } else {
+      App.showToast('模板格式无效');
+    }
+  },
+
+  previewTemplate(templateKey) {
+    const builtin = (typeof WSW_TEMPLATES !== 'undefined') ? WSW_TEMPLATES : {};
+    const user = this.getUserTemplates();
+    const templates = { ...builtin, ...user };
+    const tpl = templates[templateKey];
+    if (!tpl || !tpl.doc) return;
+
+    // 弹出预览窗口
+    const existing = document.getElementById('wswTemplatePreview');
+    if (existing) existing.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'wswTemplatePreview';
+    panel.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10001;display:flex;align-items:center;justify-content:center;font-family:"Microsoft YaHei",sans-serif;';
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:var(--surface,#16162a);border:1px solid var(--border,#2a2a45);border-radius:10px;width:680px;max-width:92vw;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden;';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'padding:16px 22px;border-bottom:1px solid var(--border,#2a2a45);display:flex;justify-content:space-between;align-items:center;';
+    header.innerHTML = '<div style="font-size:14px;font-weight:600;color:var(--text,#e0e0ee);">' + (tpl.icon || '📄') + ' ' + this.esc(tpl.name || templateKey) + ' · 预览</div>';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'background:none;border:none;color:var(--text2,#8888a8);font-size:16px;cursor:pointer;padding:4px 8px;';
+    closeBtn.onclick = () => panel.remove();
+    header.appendChild(closeBtn);
+    dialog.appendChild(header);
+
+    const content = document.createElement('div');
+    content.style.cssText = 'padding:18px 22px;overflow-y:auto;flex:1;font-size:12px;color:var(--text,#e0e0ee);line-height:1.7;';
+
+    const cards = tpl.doc.cards || [];
+    let html = '<div style="margin-bottom:14px;color:var(--text2,#8888a8);">' + this.esc(tpl.description || '') + '</div>';
+    html += '<div style="margin-bottom:10px;"><b style="color:var(--accent,#b39ddb);">文档标题：</b>' + this.esc(tpl.doc.title || '') + '</div>';
+    html += '<div style="margin-bottom:14px;"><b style="color:var(--accent,#b39ddb);">卡片数量：</b>' + cards.length + ' 个</div>';
+    html += '<div style="font-size:11px;color:var(--accent,#b39ddb);font-weight:700;margin-bottom:8px;letter-spacing:1px;">章节结构</div>';
+    html += '<ol style="margin:0;padding-left:20px;">';
+    cards.forEach((c, i) => {
+      const typeLabel = {
+        textbox: '📝 文字',
+        table: '📊 表格',
+        chartCard: '📈 图表(' + (c.chartType || 'bar') + ')',
+        htmlBlock: '🧩 HTML',
+        shape: '⬜ 形状',
+        videoContainer: '🎬 视频',
+        audioContainer: '🎵 音频',
+        textContainer: '📄 文本容器',
+        excelContainer: '📊 Excel',
+        aiworkflow: '🤖 工作流'
+      }[c.type] || c.type;
+      html += '<li style="margin-bottom:5px;"><b>' + typeLabel + '</b> · ' + this.esc(c.name || '') + ' <span style="color:var(--text2,#8888a8);font-size:10px;">(' + c.w + '×' + c.h + ')</span></li>';
+    });
+    html += '</ol>';
+    content.innerHTML = html;
+    dialog.appendChild(content);
+
+    const footer = document.createElement('div');
+    footer.style.cssText = 'padding:12px 22px;border-top:1px solid var(--border,#2a2a45);display:flex;justify-content:flex-end;gap:8px;';
+    const applyBtn = document.createElement('button');
+    applyBtn.textContent = '✓ 应用此模板';
+    applyBtn.style.cssText = 'padding:7px 16px;background:var(--primary,#4fc3f7);color:var(--bg,#0f0f1a);border:none;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;';
+    applyBtn.onclick = () => { panel.remove(); document.getElementById('wswTemplatePanel')?.remove(); this.applyDocumentTemplate(templateKey); };
+    footer.appendChild(applyBtn);
+    dialog.appendChild(footer);
+
+    panel.appendChild(dialog);
+    panel.addEventListener('click', (e) => { if (e.target === panel) panel.remove(); });
+    document.body.appendChild(panel);
   },
 
   // ===== 文档操作 =====
@@ -892,12 +2817,13 @@ const SNAP_DIST=10;
 const canvas=document.getElementById('canvas'),canvasInner=document.getElementById('canvas-inner'),cardsContainer=document.getElementById('cards-container'),snapContainer=document.getElementById('snap-lines-container'),zoomDisplay=document.getElementById('zoomDisplay'),hint=document.getElementById('hint'),contextMenu=document.getElementById('contextMenu'),helpPanel=document.getElementById('helpPanel'),gridBg=document.getElementById('gridBg');
 function applyBackground(){const bg=WSW_DATA.background;if(bg.type==='color'){canvas.style.background=bg.value;canvas.style.backgroundImage='none'}else if(bg.type==='gradient'){canvas.style.background=bg.value}else if(bg.type==='image'){canvas.style.background='url('+bg.value+') center/cover no-repeat'}gridBg.style.display=WSW_DATA.showGrid?'':'none'}
 function renderCards(){cardsContainer.innerHTML='';WSW_DATA.cards.forEach(card=>{const el=createElementByType(card);if(el)cardsContainer.appendChild(el)})}
-function createElementByType(card){if(card.type==='textbox')return createTextBox(card);if(card.type==='table')return createTable(card);if(card.type==='chartCard')return createChartCard(card);if(['rect','circle','triangle','line','arrow','star'].includes(card.type))return createShape(card);return createCardElement(card)}
+function createElementByType(card){if(card.type==='textbox')return createTextBox(card);if(card.type==='table')return createTable(card);if(card.type==='chartCard')return createChartCard(card);if(card.type==='htmlBlock')return createHtmlBlock(card);if(['rect','circle','triangle','line','arrow','star'].includes(card.type))return createShape(card);return createCardElement(card)}
 function createCardElement(card){const el=document.createElement('div');el.className='res-card'+(selectedCards.has(card.id)?' selected':'');el.dataset.id=card.id;el.style.left=card.x+'px';el.style.top=card.y+'px';el.style.width=card.w+'px';el.style.height=card.h+'px';el.style.zIndex=card.z||1;let bodyHtml='';switch(card.type){case'image':bodyHtml=card.src?'<img src="'+card.src+'" alt="'+esc(card.name)+'" draggable="false">':card.url?'<img src="'+card.url+'" alt="'+esc(card.name)+'" draggable="false" onerror="this.parentElement.innerHTML=\\'<div style=\\'color:#555;font-size:13px\\'>图片加载失败</div>\\'">':'<div style="color:#555;font-size:13px">图片加载失败</div>';break;case'video':if(card.src)bodyHtml='<video src="'+card.src+'" controls preload="metadata"'+(card.poster?' poster="'+card.poster+'"':'')+'></video>';else bodyHtml=card.poster?'<img src="'+card.poster+'" style="opacity:.6;pointer-events:none"><div style="position:absolute;font-size:48px;color:#e94560;pointer-events:none">&#x25B6;</div>':'<div style="color:#555;font-size:13px">视频未嵌入</div>';break;case'audio':bodyHtml=card.src?'<audio src="'+card.src+'" controls></audio>':'<div style="color:#555;font-size:13px;display:flex;flex-direction:column;align-items:center;gap:6px"><span style="font-size:24px">&#x1F3B5;</span><span>音频未嵌入</span></div>';break;case'text':bodyHtml='<div class="text-body">'+esc(card.content||'')+'</div>';break;case'link':bodyHtml='<div class="link-body"><span style="font-size:24px">&#x1F517;</span><a href="'+esc(card.url||'#')+'" target="_blank" onclick="event.stopPropagation()">'+esc(card.displayUrl||card.url||'')+'</a></div>';break}el.innerHTML='<div class="card-header" draggable="false"><span class="card-icon">'+typeIcon(card.type)+'</span><span class="card-title">'+esc(card.name)+'</span><span class="card-type type-'+card.type+'">'+card.type.toUpperCase()+'</span></div><div class="card-body">'+bodyHtml+'</div><div class="resize-handle"></div>';const header=el.querySelector('.card-header');header.addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();startDragElement(e,el,card)});el.querySelector('.resize-handle').addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();saveUndoState();resizeCard=card;resizeStartX=e.clientX;resizeStartY=e.clientY;resizeStartW=card.w;resizeStartH=card.h});el.addEventListener('mousedown',e=>{if(e.button===0)handleSelect(e,card,el)});el.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();handleContext(e,card,el)});return el}
 function createTextBox(card){const el=document.createElement('div');el.className='text-box'+(selectedCards.has(card.id)?' selected':'');el.dataset.id=card.id;el.style.left=card.x+'px';el.style.top=card.y+'px';el.style.width=card.w+'px';el.style.height=card.h+'px';el.style.zIndex=card.z||1;const content=document.createElement('div');content.className='tb-content';content.contentEditable='true';content.setAttribute('data-placeholder','输入文字...');content.textContent=card.content||'';content.style.fontSize=(card.fontSize||15)+'px';content.style.color=card.color||'#eee';content.style.fontWeight=card.bold?'bold':'normal';el.appendChild(content);const rh=document.createElement('div');rh.className='resize-handle';el.appendChild(rh);el.addEventListener('mousedown',e=>{if(e.button!==0)return;if(e.target===content||content.contains(e.target))return;if(e.target.classList.contains('resize-handle'))return;e.preventDefault();startDragElement(e,el,card)});content.addEventListener('dblclick',e=>{e.stopPropagation();content.focus()});content.addEventListener('input',()=>{card.content=content.textContent});content.addEventListener('mousedown',e=>e.stopPropagation());rh.addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();saveUndoState();resizeCard=card;resizeStartX=e.clientX;resizeStartY=e.clientY;resizeStartW=card.w;resizeStartH=card.h});el.addEventListener('mousedown',e=>{if(e.button===0)handleSelect(e,card,el)});el.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();handleContext(e,card,el)});return el}
-function createTable(card){const el=document.createElement('div');el.className='wsw-table'+(selectedCards.has(card.id)?' selected':'');el.dataset.id=card.id;el.style.left=card.x+'px';el.style.top=card.y+'px';el.style.width=card.w+'px';el.style.height=card.h+'px';el.style.zIndex=card.z||1;const rows=card.rows||3,cols=card.cols||3,data=card.data||[];let tableHtml='<div class="table-header-bar"><span class="th-icon">📊</span><span class="th-title">表格</span></div><table><tbody>';for(let r=0;r<rows;r++){tableHtml+='<tr>';for(let c=0;c<cols;c++){const tag=r===0?'th':'td';const val=(data[r]&&data[r][c])||'';tableHtml+='<'+tag+' contenteditable="true" data-row="'+r+'" data-col="'+c+'">'+esc(val)+'</'+tag+'>'}tableHtml+='</tr>'}tableHtml+='</tbody></table><div class="resize-handle"></div>';el.innerHTML=tableHtml;const headerBar=el.querySelector('.table-header-bar');headerBar.addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();startDragElement(e,el,card)});el.querySelectorAll('td,th').forEach(cell=>{cell.addEventListener('mousedown',e=>e.stopPropagation());cell.addEventListener('input',()=>{const r=parseInt(cell.dataset.row),c=parseInt(cell.dataset.col);if(!card.data[r])card.data[r]=[];card.data[r][c]=cell.textContent})});el.querySelector('.resize-handle').addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();saveUndoState();resizeCard=card;resizeStartX=e.clientX;resizeStartY=e.clientY;resizeStartW=card.w;resizeStartH=card.h});el.addEventListener('mousedown',e=>{if(e.button===0)handleSelect(e,card,el)});el.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();handleContext(e,card,el)});return el}
+function createTable(card){const el=document.createElement('div');el.className='wsw-table'+(selectedCards.has(card.id)?' selected':'');el.dataset.id=card.id;el.style.left=card.x+'px';el.style.top=card.y+'px';el.style.width=card.w+'px';el.style.height=card.h+'px';el.style.zIndex=card.z||1;let rows,cols,data;if(card.tableData&&card.tableData.length){data=card.tableData;rows=data.length;cols=(data[0]||[]).length}else{rows=card.rows||3;cols=card.cols||3;data=card.data||[]}let tableHtml='<div class="table-header-bar"><span class="th-icon">📊</span><span class="th-title">'+esc(card.name||'表格')+'</span></div><table><tbody>';for(let r=0;r<rows;r++){tableHtml+='<tr>';for(let c=0;c<cols;c++){const tag=r===0?'th':'td';const val=(data[r]&&data[r][c])||'';tableHtml+='<'+tag+' contenteditable="true" data-row="'+r+'" data-col="'+c+'">'+esc(val)+'</'+tag+'>'}tableHtml+='</tr>'}tableHtml+='</tbody></table><div class="resize-handle"></div>';el.innerHTML=tableHtml;const headerBar=el.querySelector('.table-header-bar');headerBar.addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();startDragElement(e,el,card)});el.querySelectorAll('td,th').forEach(cell=>{cell.addEventListener('mousedown',e=>e.stopPropagation());cell.addEventListener('input',()=>{const r=parseInt(cell.dataset.row),c=parseInt(cell.dataset.col);if(!card.tableData)card.tableData=data;if(!card.tableData[r])card.tableData[r]=[];card.tableData[r][c]=cell.textContent})});el.querySelector('.resize-handle').addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();saveUndoState();resizeCard=card;resizeStartX=e.clientX;resizeStartY=e.clientY;resizeStartW=card.w;resizeStartH=card.h});el.addEventListener('mousedown',e=>{if(e.button===0)handleSelect(e,card,el)});el.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();handleContext(e,card,el)});return el}
 function createShape(card){const el=document.createElement('div');el.className='shape-box'+(selectedCards.has(card.id)?' selected':'');el.dataset.id=card.id;el.style.left=card.x+'px';el.style.top=card.y+'px';el.style.width=card.w+'px';el.style.height=card.h+'px';el.style.zIndex=card.z||1;const color=card.color||'#e94560',fill=card.fill||'none',sw=card.strokeWidth||2;let svgContent='';switch(card.type){case'rect':svgContent='<rect x="4" y="4" width="calc(100% - 8px)" height="calc(100% - 8px)" rx="6" fill="'+fill+'" stroke="'+color+'" stroke-width="'+sw+'"/>';break;case'circle':svgContent='<ellipse cx="50%" cy="50%" rx="48%" ry="48%" fill="'+fill+'" stroke="'+color+'" stroke-width="'+sw+'"/>';break;case'triangle':svgContent='<polygon points="50%,4 96%,96% 4%,96%" fill="'+fill+'" stroke="'+color+'" stroke-width="'+sw+'"/>';break;case'line':svgContent='<line x1="4" y1="50%" x2="calc(100% - 4px)" y2="50%" stroke="'+color+'" stroke-width="'+(sw+1)+'"/>';break;case'arrow':svgContent='<line x1="4" y1="50%" x2="calc(100% - 20px)" y2="50%" stroke="'+color+'" stroke-width="'+(sw+1)+'"/><polygon points="calc(100% - 4px),50% calc(100% - 20px),42% calc(100% - 20px),58%" fill="'+color+'"/>';break;case'star':svgContent='<polygon points="50%,4 61%,38 97%,38 68%,59 79%,93 50%,72 21%,93 32%,59 3%,38 39%,38" fill="'+fill+'" stroke="'+color+'" stroke-width="'+sw+'"/>';break}el.innerHTML='<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:100%">'+svgContent+'</svg><div class="resize-handle"></div>';el.addEventListener('mousedown',e=>{if(e.button!==0)return;if(e.target.classList.contains('resize-handle'))return;e.preventDefault();startDragElement(e,el,card);handleSelect(e,card,el)});el.querySelector('.resize-handle').addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();saveUndoState();resizeCard=card;resizeStartX=e.clientX;resizeStartY=e.clientY;resizeStartW=card.w;resizeStartH=card.h});el.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();handleContext(e,card,el)});return el}
 function createChartCard(card){const el=document.createElement('div');el.className='res-card'+(selectedCards.has(card.id)?' selected':'');el.dataset.id=card.id;el.style.left=card.x+'px';el.style.top=card.y+'px';el.style.width=card.w+'px';el.style.height=card.h+'px';el.style.zIndex=card.z||1;const chartType=card.chartType||'bar';const chartTypeLabel={bar:'柱状图',pie:'饼图',line:'折线图',wordcloud:'词云'}[chartType]||'柱状图';const chartTypeIcon={bar:'📊',pie:'🥧',line:'📈',wordcloud:'☁️'}[chartType]||'📊';const data=card.chartData||{labels:[],values:[]};const dataCount=(data.labels?data.labels.length:0);const bodyHtml='<div style="position:absolute;top:0;left:0;right:0;bottom:0"><canvas id="chartCard_'+card.id+'" data-chart-card-id="'+card.id+'" data-chart-type="'+chartType+'" style="display:block;width:100%;height:100%"></canvas><div style="position:absolute;bottom:2px;left:8px;font-size:10px;color:#8888a8;pointer-events:none">📊 数据点: '+dataCount+'</div></div>';el.innerHTML='<div class="card-header" draggable="false"><span class="card-icon">'+chartTypeIcon+'</span><span class="card-title">'+esc(card.name||'统计图')+'</span><span class="card-type type-text">'+esc(chartTypeLabel)+'</span></div><div class="card-body" style="padding:0;display:block;position:relative">'+bodyHtml+'</div><div class="resize-handle"></div>';const header=el.querySelector('.card-header');header.addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();startDragElement(e,el,card)});el.querySelector('.resize-handle').addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();saveUndoState();resizeCard=card;resizeStartX=e.clientX;resizeStartY=e.clientY;resizeStartW=card.w;resizeStartH=card.h});el.addEventListener('mousedown',e=>{if(e.button===0)handleSelect(e,card,el)});el.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();handleContext(e,card,el)});return el}
+function createHtmlBlock(card){const el=document.createElement('div');el.className='res-card'+(selectedCards.has(card.id)?' selected':'');el.dataset.id=card.id;el.style.left=card.x+'px';el.style.top=card.y+'px';el.style.width=card.w+'px';el.style.height=card.h+'px';el.style.zIndex=card.z||1;const scopeId='htmlblock_'+card.id;const htmlContent=card.htmlContent||'<div style="padding:20px;text-align:center;color:#888;"><h3>HTML 块</h3><p>双击编辑 HTML/CSS 内容</p></div>';const cssContent=card.cssContent||'';let scopedCss='';if(cssContent){scopedCss=cssContent.replace(/\/\*[\s\S]*?\*\//g,'').replace(/([^^{}@]+)\{/g,function(match,selectors){if(selectors.trim().startsWith('@'))return match;const scoped=selectors.split(',').map(function(s){const t=s.trim();if(!t)return s;if(t.startsWith('#'+scopeId))return s;return '#'+scopeId+' '+t}).join(', ');return scoped+' {'})}const bodyHtml='<div id="'+scopeId+'" class="wsw-htmlblock-body" style="width:100%;height:100%;overflow:auto">'+(scopedCss?'<style>'+scopedCss+'</style>':'')+htmlContent+'</div>';el.innerHTML='<div class="card-header" draggable="false"><span class="card-icon">🧩</span><span class="card-title">'+esc(card.name||'HTML 块')+'</span><span class="card-type type-text">HTML</span></div><div class="card-body" style="padding:0;display:block;position:relative;overflow:hidden">'+bodyHtml+'</div><div class="resize-handle"></div>';const header=el.querySelector('.card-header');header.addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();startDragElement(e,el,card)});el.querySelector('.resize-handle').addEventListener('mousedown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();saveUndoState();resizeCard=card;resizeStartX=e.clientX;resizeStartY=e.clientY;resizeStartW=card.w;resizeStartH=card.h});el.addEventListener('mousedown',e=>{if(e.button===0)handleSelect(e,card,el)});el.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();handleContext(e,card,el)});return el}
 function renderAllCharts(){WSW_DATA.cards.forEach(card=>{if(card.type!=='chartCard')return;const canvas=document.querySelector('canvas[data-chart-card-id="'+card.id+'"]');if(!canvas)return;const data=card.chartData||{labels:[],values:[]};const chartType=card.chartType||'bar';try{if(chartType==='bar')_drawChartBar(canvas,data);else if(chartType==='pie')_drawChartPie(canvas,data);else if(chartType==='line')_drawChartLine(canvas,data);else if(chartType==='wordcloud')_drawWordCloud(canvas,data)}catch(e){console&&console.error&&console.error('chart render error:',e)}})}
 function _drawChartBar(canvas, data) {
   const ctx = canvas.getContext('2d');
@@ -1172,6 +3098,11 @@ applyBackground();renderCards();renderAllCharts();setTimeout(()=>{fitView();show
       App.showToast('无可撤销操作');
       return;
     }
+    // 保存当前状态到 redo 栈
+    if (this.state.doc) {
+      this.state.redoStack.push(JSON.parse(JSON.stringify(this.state.doc)));
+      if (this.state.redoStack.length > 50) this.state.redoStack.shift();
+    }
     const prev = this.state.undoStack.pop();
     this.state.doc = prev;
     this.state.selectedCards.clear();
@@ -1179,6 +3110,78 @@ applyBackground();renderCards();renderAllCharts();setTimeout(()=>{fitView();show
     this.renderCanvas();
     App.showToast('已撤销');
   },
+
+  redo() {
+    if (this.state.redoStack.length === 0) {
+      App.showToast('无可重做操作');
+      return;
+    }
+    // 保存当前状态到 undo 栈
+    if (this.state.doc) {
+      this.state.undoStack.push(JSON.parse(JSON.stringify(this.state.doc)));
+      if (this.state.undoStack.length > 50) this.state.undoStack.shift();
+    }
+    const next = this.state.redoStack.pop();
+    this.state.doc = next;
+    this.state.selectedCards.clear();
+    this.state.editingCardId = null;
+    this.renderCanvas();
+    App.showToast('已重做');
+  },
+
+  // ===== 多选对齐工具（需先选中 2+ 卡片）=====
+  alignSelected(type) {
+    if (!this.state.doc || this.state.selectedCards.size < 2) {
+      App.showToast('请先选中至少 2 张卡片');
+      return;
+    }
+    this.saveUndo();
+    const cards = this.state.doc.cards.filter(c => this.state.selectedCards.has(c.id));
+    if (cards.length < 2) return;
+    if (type === 'left') {
+      const minX = Math.min(...cards.map(c => c.x));
+      cards.forEach(c => c.x = minX);
+    } else if (type === 'right') {
+      const maxX = Math.max(...cards.map(c => c.x + c.w));
+      cards.forEach(c => c.x = maxX - c.w);
+    } else if (type === 'top') {
+      const minY = Math.min(...cards.map(c => c.y));
+      cards.forEach(c => c.y = minY);
+    } else if (type === 'bottom') {
+      const maxY = Math.max(...cards.map(c => c.y + c.h));
+      cards.forEach(c => c.y = maxY - c.h);
+    } else if (type === 'hCenter') {
+      const cs = cards.map(c => c.x + c.w / 2);
+      const avg = cs.reduce((a, b) => a + b, 0) / cs.length;
+      cards.forEach(c => c.x = avg - c.w / 2);
+    } else if (type === 'vCenter') {
+      const cs = cards.map(c => c.y + c.h / 2);
+      const avg = cs.reduce((a, b) => a + b, 0) / cs.length;
+      cards.forEach(c => c.y = avg - c.h / 2);
+    } else if (type === 'hDist') {
+      // 水平等距分布
+      cards.sort((a, b) => a.x - b.x);
+      if (cards.length < 3) { App.showToast('分布需要至少 3 张卡片'); return; }
+      const first = cards[0], last = cards[cards.length - 1];
+      const totalGap = (last.x + last.w) - first.x - cards.reduce((s, c) => s + c.w, 0);
+      const gap = totalGap / (cards.length - 1);
+      let curX = first.x;
+      cards.forEach((c, i) => { c.x = curX; curX += c.w + gap; });
+    } else if (type === 'vDist') {
+      cards.sort((a, b) => a.y - b.y);
+      if (cards.length < 3) { App.showToast('分布需要至少 3 张卡片'); return; }
+      const first = cards[0], last = cards[cards.length - 1];
+      const totalGap = (last.y + last.h) - first.y - cards.reduce((s, c) => s + c.h, 0);
+      const gap = totalGap / (cards.length - 1);
+      let curY = first.y;
+      cards.forEach((c, i) => { c.y = curY; curY += c.h + gap; });
+    }
+    this.renderCanvas();
+    App.showToast('已对齐: ' + type);
+  },
+
+  // 导出为自包含 HTML 文件（与 saveDoc 一致，作为菜单入口）
+  exportHtml() { this.saveDoc(); },
 
   // ===== 元素添加 =====
   addTextBox() {
@@ -1358,9 +3361,10 @@ applyBackground();renderCards();renderAllCharts();setTimeout(()=>{fitView();show
     App.showToast('已添加Excel容器（表格+统计图）');
   },
 
-  addChartCard() {
+  addChartCard(chartType) {
     const card = this._createContainer('chartCard', '统计图', 400, 300);
     if (!card) return;
+    if (chartType) card.chartType = chartType;
     this.renderCanvas();
     App.showToast('已添加统计图卡片（连接 Excel/文本容器）');
   },
@@ -1373,6 +3377,163 @@ applyBackground();renderCards();renderAllCharts();setTimeout(()=>{fitView();show
     card.cssContent = '';
     this.renderCanvas();
     App.showToast('已添加 HTML 块卡片（支持 HTML/CSS 渲染）');
+  },
+
+  // ===== 新增数据分析卡片类型 =====
+  // 指标卡（KPI）：单个大数字 + 标题 + 变化趋势
+  addMetricCard() {
+    const card = this._createContainer('metricCard', '指标卡', 220, 140);
+    if (!card) return;
+    card.metricLabel = '指标名称';
+    card.metricValue = '1,234';
+    card.metricUnit = '';
+    card.metricChange = '+12.5%';
+    card.metricTrend = 'up'; // up/down/flat
+    card.metricColor = '#4fc3f7';
+    this.renderCanvas();
+    App.showToast('已添加指标卡（双击编辑数据）');
+  },
+
+  // 进度条卡：多个水平进度条对比
+  addProgressCard() {
+    const card = this._createContainer('progressCard', '进度对比', 360, 240);
+    if (!card) return;
+    card.progressItems = [
+      { label: '项目 A', value: 85, color: '#4fc3f7' },
+      { label: '项目 B', value: 62, color: '#b39ddb' },
+      { label: '项目 C', value: 45, color: '#ef5350' },
+      { label: '项目 D', value: 78, color: '#4dd0c8' }
+    ];
+    card.progressMax = 100;
+    this.renderCanvas();
+    App.showToast('已添加进度条卡（双击编辑）');
+  },
+
+  // 时间轴卡：按时间顺序展示事件
+  addTimelineCard() {
+    const card = this._createContainer('timelineCard', '时间轴', 360, 280);
+    if (!card) return;
+    card.timelineItems = [
+      { time: '2026-01', title: '项目启动', desc: '完成需求调研', color: '#4fc3f7' },
+      { time: '2026-03', title: '开发阶段', desc: '核心功能开发完成', color: '#b39ddb' },
+      { time: '2026-06', title: '测试发布', desc: '通过 UAT 测试', color: '#4dd0c8' },
+      { time: '2026-09', title: '正式上线', desc: '全量用户开放', color: '#00ff9d' }
+    ];
+    this.renderCanvas();
+    App.showToast('已添加时间轴卡（双击编辑事件）');
+  },
+
+  // 分隔线卡：带标题的分隔条
+  addDividerCard() {
+    const card = this._createContainer('dividerCard', '分隔线', 500, 50);
+    if (!card) return;
+    card.dividerText = '章节标题';
+    card.dividerColor = '#4fc3f7';
+    card.dividerStyle = 'line'; // line/dots/gradient
+    this.renderCanvas();
+    App.showToast('已添加分隔线');
+  },
+
+  // 引言/注解卡：带边框的强调文本块
+  addCalloutCard() {
+    const card = this._createContainer('calloutCard', '注解', 360, 120);
+    if (!card) return;
+    card.calloutText = '在此输入重要注解或引言内容...';
+    card.calloutType = 'info'; // info/warning/success/danger
+    this.renderCanvas();
+    App.showToast('已添加注解卡');
+  },
+
+  // 雷达图卡
+  addRadarCard() {
+    const card = this._createContainer('radarCard', '雷达图', 320, 320);
+    if (!card) return;
+    card.radarLabels = ['速度', '功率', '成本', '可靠性', '可维护性'];
+    card.radarValues = [85, 72, 90, 78, 65];
+    card.radarMax = 100;
+    this.renderCanvas();
+    App.showToast('已添加雷达图（双击编辑维度）');
+  },
+
+  // 二维码卡：把文本生成 QR 码（用 Google Chart API 等效的简易实现）
+  addQrcodeCard() {
+    const card = this._createContainer('qrcodeCard', '二维码', 200, 240);
+    if (!card) return;
+    card.qrcodeText = 'https://example.com';
+    card.qrcodeSize = 160;
+    this.renderCanvas();
+    App.showToast('已添加二维码卡（双击编辑内容）');
+  },
+
+  // ===== 第二批新增卡片类型 =====
+  // 仪表盘卡：半圆/圆弧 gauge，单值显示
+  addGaugeCard() {
+    const card = this._createContainer('gaugeCard', '仪表盘', 220, 200);
+    if (!card) return;
+    card.gaugeValue = 72;
+    card.gaugeMax = 100;
+    card.gaugeLabel = '完成率';
+    card.gaugeUnit = '%';
+    card.gaugeColor = '#4fc3f7';
+    this.renderCanvas();
+    App.showToast('已添加仪表盘卡');
+  },
+
+  // 统计卡：紧凑型多指标汇总（4 个小数字方阵）
+  addStatCard() {
+    const card = this._createContainer('statCard', '统计卡', 360, 160);
+    if (!card) return;
+    card.statItems = [
+      { label: '总数', value: '1,247', sub: '+12.3%', color: '#4fc3f7' },
+      { label: '活跃', value: '892', sub: '+5.6%', color: '#4dd0c8' },
+      { label: '转化', value: '34.2%', sub: '-1.2%', color: '#ffb74d' },
+      { label: '收入', value: '¥58K', sub: '+18.5%', color: '#b39ddb' }
+    ];
+    this.renderCanvas();
+    App.showToast('已添加统计卡');
+  },
+
+  // 对比卡：两栏左右对照（Before/After、A/B）
+  addCompareCard() {
+    const card = this._createContainer('compareCard', '对比卡', 460, 280);
+    if (!card) return;
+    card.compareLeftTitle = '方案 A';
+    card.compareRightTitle = '方案 B';
+    card.compareLeftItems = ['成本低', '开发快', '维护简单', '扩展性弱'];
+    card.compareRightItems = ['成本较高', '开发周期长', '维护复杂', '扩展性强'];
+    card.compareVerdict = '建议：根据业务规模选择';
+    this.renderCanvas();
+    App.showToast('已添加对比卡');
+  },
+
+  // 漏斗图卡：阶段转化漏斗
+  addFunnelCard() {
+    const card = this._createContainer('funnelCard', '漏斗图', 320, 360);
+    if (!card) return;
+    card.funnelStages = [
+      { name: '访问', value: 10000, color: '#4fc3f7' },
+      { name: '注册', value: 4500, color: '#4dd0c8' },
+      { name: '试用', value: 2100, color: '#b39ddb' },
+      { name: '付费', value: 680, color: '#ffb74d' },
+      { name: '续费', value: 320, color: '#ff8a65' }
+    ];
+    this.renderCanvas();
+    App.showToast('已添加漏斗图');
+  },
+
+  // 流程图卡：节点 + 箭头的水平流程
+  addFlowCard() {
+    const card = this._createContainer('flowCard', '流程图', 560, 160);
+    if (!card) return;
+    card.flowSteps = [
+      { name: '数据采集', desc: '爬虫抓取', color: '#4fc3f7' },
+      { name: '清洗处理', desc: '去重清洗', color: '#4dd0c8' },
+      { name: '分析建模', desc: 'AI 分析', color: '#b39ddb' },
+      { name: '可视化', desc: '生成图表', color: '#ffb74d' },
+      { name: '导出报告', desc: 'HTML/PDF', color: '#ff8a65' }
+    ];
+    this.renderCanvas();
+    App.showToast('已添加流程图');
   },
 
   // Task 16: 添加 AI 工作流容器
@@ -3251,10 +5412,13 @@ applyBackground();renderCards();renderAllCharts();setTimeout(()=>{fitView();show
 
     // 空文档处理
     if (this.state.doc.cards.length === 0) {
-      // 清空画布内容但保留网格背景
+      // 清空画布内容
       const inner = document.getElementById('wswCanvasInner');
       if (inner) inner.innerHTML = '';
-      // 不显示 wswEmpty（新建文档时不应显示提示）
+      // 显示空状态提示
+      document.getElementById('wswEmpty').style.display = 'flex';
+      // 仍然应用背景
+      this.applyBackground();
       return;
     }
 
@@ -3287,11 +5451,26 @@ applyBackground();renderCards();renderAllCharts();setTimeout(()=>{fitView();show
     setTimeout(() => this._renderCharts(), 0);
   },
 
+  // 卡片类型 → 中文标签映射（用于直接标签，不依赖颜色辨识）
+  cardTypeLabel(type) {
+    const map = {
+      textbox: '文字', table: '表格', chartCard: '图表', htmlBlock: 'HTML',
+      videoContainer: '视频', audioContainer: '音频', textContainer: '文本',
+      excelContainer: '表格', aiworkflow: '工作流', metricCard: '指标',
+      progressCard: '进度', timelineCard: '时间轴', dividerCard: '分隔',
+      calloutCard: '提示', radarCard: '雷达', qrcodeCard: '二维码', shape: '形状',
+      gaugeCard: '仪表盘', statCard: '统计', compareCard: '对比',
+      funnelCard: '漏斗', flowCard: '流程'
+    };
+    return map[type] || '卡片';
+  },
+
   createCardElement(card) {
     const el = document.createElement('div');
     el.className = this.getCardClassName(card);
     if (this.state.selectedCards.has(card.id)) el.classList.add('selected');
     el.dataset.cardId = card.id;
+    el.dataset.type = card.type;  // 触发色条 CSS（::before + --card-accent）
     el.style.left = card.x + 'px';
     el.style.top = card.y + 'px';
     el.style.width = card.w + 'px';
@@ -3318,12 +5497,51 @@ applyBackground();renderCards();renderAllCharts();setTimeout(()=>{fitView();show
       el.innerHTML = this.renderHtmlBlock(card);
     } else if (card.type === 'aiworkflow') {
       el.innerHTML = this.renderAiworkflowContainer(card);
+    } else if (card.type === 'metricCard') {
+      el.innerHTML = this.renderMetricCard(card);
+    } else if (card.type === 'progressCard') {
+      el.innerHTML = this.renderProgressCard(card);
+    } else if (card.type === 'timelineCard') {
+      el.innerHTML = this.renderTimelineCard(card);
+    } else if (card.type === 'dividerCard') {
+      el.innerHTML = this.renderDividerCard(card);
+    } else if (card.type === 'calloutCard') {
+      el.innerHTML = this.renderCalloutCard(card);
+    } else if (card.type === 'radarCard') {
+      el.innerHTML = this.renderRadarCard(card);
+    } else if (card.type === 'qrcodeCard') {
+      el.innerHTML = this.renderQrcodeCard(card);
+    } else if (card.type === 'gaugeCard') {
+      el.innerHTML = this.renderGaugeCard(card);
+    } else if (card.type === 'statCard') {
+      el.innerHTML = this.renderStatCard(card);
+    } else if (card.type === 'compareCard') {
+      el.innerHTML = this.renderCompareCard(card);
+    } else if (card.type === 'funnelCard') {
+      el.innerHTML = this.renderFunnelCard(card);
+    } else if (card.type === 'flowCard') {
+      el.innerHTML = this.renderFlowCard(card);
     } else {
       el.innerHTML = '<div class="wsw-card-header"><span>' + this.esc(card.name || '') + '</span></div><div class="wsw-card-body">' + this.esc(card.content || '') + '</div><div class="wsw-resize"></div>';
     }
 
+    // 在卡片头部注入类型标签（direct labels 原则：不依赖颜色辨识）
+    this._injectTypeTag(el, card.type);
+
     this.bindCardEvents(el, card);
     return el;
+  },
+
+  // 注入类型标签到卡片头部（位于标题与工具栏之间）
+  _injectTypeTag(el, type) {
+    const header = el.querySelector('.wsw-card-header');
+    if (!header) return;
+    const tag = document.createElement('span');
+    tag.className = 'wsw-card-type-tag';
+    tag.textContent = this.cardTypeLabel(type);
+    const toolbar = header.querySelector('.wsw-md-toolbar');
+    if (toolbar) header.insertBefore(tag, toolbar);
+    else header.appendChild(tag);
   },
 
   // 删除卡片
@@ -4115,6 +6333,789 @@ applyBackground();renderCards();renderAllCharts();setTimeout(()=>{fitView();show
       '<div class="wsw-container-body wsw-chart-body">' + bodyHtml + '</div>' +
       '<div class="wsw-container-footer">' + modeBadges + '</div>' +
       '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  // ===== HTML 块渲染 =====
+  // ===== 新增卡片渲染方法 =====
+  renderMetricCard(card) {
+    const trendIcon = card.metricTrend === 'up' ? '▲' : (card.metricTrend === 'down' ? '▼' : '▶');
+    const trendColor = card.metricTrend === 'up' ? '#4dd0c8' : (card.metricTrend === 'down' ? '#ef5350' : '#888');
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>📌</span><span class="wsw-card-title">' + this.esc(card.name || '指标卡') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editMetric" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-container-body" style="display:flex;flex-direction:column;justify-content:center;padding:16px;background:#0a0a1a">' +
+        '<div style="font-size:11px;color:#888;margin-bottom:6px;letter-spacing:1px">' + this.esc(card.metricLabel || '指标') + '</div>' +
+        '<div style="display:flex;align-items:baseline;gap:4px">' +
+          '<span style="font-size:36px;font-weight:700;color:' + (card.metricColor || '#4fc3f7') + ';font-family:Consolas,monospace">' + this.esc(card.metricValue || '0') + '</span>' +
+          '<span style="font-size:14px;color:#888">' + this.esc(card.metricUnit || '') + '</span>' +
+        '</div>' +
+        '<div style="font-size:12px;color:' + trendColor + ';margin-top:4px">' + trendIcon + ' ' + this.esc(card.metricChange || '') + '</div>' +
+      '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  renderProgressCard(card) {
+    const items = card.progressItems || [];
+    const max = card.progressMax || 100;
+    const bars = items.map((it, i) => {
+      const pct = Math.min(100, (it.value / max) * 100);
+      return '<div style="margin-bottom:10px">' +
+        '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px"><span style="color:#ccc">' + this.esc(it.label) + '</span><span style="color:' + (it.color || '#4fc3f7') + ';font-family:monospace">' + it.value + '</span></div>' +
+        '<div style="height:10px;background:#1a1a2e;border-radius:5px;overflow:hidden">' +
+          '<div style="height:100%;width:' + pct + '%;background:' + (it.color || '#4fc3f7') + ';border-radius:5px;transition:width .3s;box-shadow:0 0 8px ' + (it.color || '#4fc3f7') + '"></div>' +
+        '</div></div>';
+    }).join('');
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>📊</span><span class="wsw-card-title">' + this.esc(card.name || '进度对比') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editProgress" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-container-body" style="padding:14px;background:#0a0a1a;overflow-y:auto">' + bars + '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  renderTimelineCard(card) {
+    const items = card.timelineItems || [];
+    const events = items.map((it, i) => {
+      const isLast = i === items.length - 1;
+      return '<div style="display:flex;gap:12px;position:relative">' +
+        '<div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0">' +
+          '<div style="width:12px;height:12px;border-radius:50%;background:' + (it.color || '#4fc3f7') + ';box-shadow:0 0 8px ' + (it.color || '#4fc3f7') + '"></div>' +
+          (isLast ? '' : '<div style="width:2px;flex:1;background:' + (it.color || '#4fc3f7') + ';opacity:0.4;margin-top:2px"></div>') +
+        '</div>' +
+        '<div style="flex:1;padding-bottom:14px">' +
+          '<div style="font-size:10px;color:#888;font-family:monospace">' + this.esc(it.time) + '</div>' +
+          '<div style="font-size:13px;color:#e0e0ee;font-weight:600;margin:2px 0">' + this.esc(it.title) + '</div>' +
+          '<div style="font-size:11px;color:#888">' + this.esc(it.desc || '') + '</div>' +
+        '</div></div>';
+    }).join('');
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>📅</span><span class="wsw-card-title">' + this.esc(card.name || '时间轴') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editTimeline" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-container-body" style="padding:14px;background:#0a0a1a;overflow-y:auto">' + events + '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  renderDividerCard(card) {
+    const style = card.dividerStyle || 'line';
+    let lineHtml = '';
+    if (style === 'dots') {
+      lineHtml = '<div style="flex:1;border-top:2px dotted ' + (card.dividerColor || '#4fc3f7') + '"></div>';
+    } else if (style === 'gradient') {
+      lineHtml = '<div style="flex:1;height:2px;background:linear-gradient(90deg,transparent,' + (card.dividerColor || '#4fc3f7') + ',transparent)"></div>';
+    } else {
+      lineHtml = '<div style="flex:1;height:1px;background:' + (card.dividerColor || '#4fc3f7') + ';opacity:0.5"></div>';
+    }
+    return '<div class="wsw-card-header" data-action="drag" style="border:none;background:transparent">' +
+      '<div style="display:flex;align-items:center;gap:12px;width:100%;padding:0 4px">' +
+        lineHtml +
+        '<span style="font-size:13px;color:' + (card.dividerColor || '#4fc3f7') + ';font-weight:600;white-space:nowrap">' + this.esc(card.dividerText || '章节') + '</span>' +
+        lineHtml +
+      '</div>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editDivider" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  renderCalloutCard(card) {
+    const types = {
+      info: { bg: 'rgba(79,195,247,0.1)', border: '#4fc3f7', icon: 'ℹ️' },
+      warning: { bg: 'rgba(255,213,79,0.1)', border: '#ffd54f', icon: '⚠️' },
+      success: { bg: 'rgba(77,208,200,0.1)', border: '#4dd0c8', icon: '✅' },
+      danger: { bg: 'rgba(239,83,80,0.1)', border: '#ef5350', icon: '❌' }
+    };
+    const t = types[card.calloutType] || types.info;
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>' + t.icon + '</span><span class="wsw-card-title">' + this.esc(card.name || '注解') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editCallout" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-container-body" style="padding:14px;background:' + t.bg + ';border-left:4px solid ' + t.border + ';color:#e0e0ee;font-size:13px;line-height:1.6;white-space:pre-wrap">' + this.esc(card.calloutText || '') + '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  renderRadarCard(card) {
+    const labels = card.radarLabels || [];
+    const values = card.radarValues || [];
+    const max = card.radarMax || 100;
+    const n = labels.length;
+    if (n < 3) return '<div class="wsw-card-header"><span>📊 雷达图</span></div><div class="wsw-container-body">至少需要 3 个维度</div>';
+    const cx = 160, cy = 160, r = 110;
+    // 计算多边形顶点
+    let grid = '';
+    for (let level = 1; level <= 4; level++) {
+      const lr = r * level / 4;
+      let pts = '';
+      for (let i = 0; i < n; i++) {
+        const angle = -Math.PI / 2 + i * 2 * Math.PI / n;
+        pts += (cx + lr * Math.cos(angle)) + ',' + (cy + lr * Math.sin(angle)) + ' ';
+      }
+      grid += '<polygon points="' + pts + '" fill="none" stroke="#2a2a5a" stroke-width="1"/>';
+    }
+    // 轴线
+    let axes = '';
+    let labelHtml = '';
+    for (let i = 0; i < n; i++) {
+      const angle = -Math.PI / 2 + i * 2 * Math.PI / n;
+      const x2 = cx + r * Math.cos(angle);
+      const y2 = cy + r * Math.sin(angle);
+      axes += '<line x1="' + cx + '" y1="' + cy + '" x2="' + x2 + '" y2="' + y2 + '" stroke="#2a2a5a" stroke-width="1"/>';
+      const lx = cx + (r + 18) * Math.cos(angle);
+      const ly = cy + (r + 18) * Math.sin(angle);
+      labelHtml += '<text x="' + lx + '" y="' + ly + '" fill="#ccc" font-size="10" text-anchor="middle" dominant-baseline="middle">' + this.esc(labels[i]) + '</text>';
+    }
+    // 数据多边形
+    let dataPts = '';
+    for (let i = 0; i < n; i++) {
+      const angle = -Math.PI / 2 + i * 2 * Math.PI / n;
+      const val = Math.min(max, values[i] || 0);
+      const dr = r * val / max;
+      dataPts += (cx + dr * Math.cos(angle)) + ',' + (cy + dr * Math.sin(angle)) + ' ';
+    }
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>🎯</span><span class="wsw-card-title">' + this.esc(card.name || '雷达图') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editRadar" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-container-body" style="padding:8px;background:#0a0a1a;display:flex;align-items:center;justify-content:center">' +
+        '<svg width="320" height="320" viewBox="0 0 320 320">' + grid + axes +
+          '<polygon points="' + dataPts + '" fill="rgba(79,195,247,0.3)" stroke="#4fc3f7" stroke-width="2"/>' +
+          labelHtml +
+        '</svg>' +
+      '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  renderQrcodeCard(card) {
+    // 简易 QR 码：用在线 API 生成（离线时显示文本）
+    const text = encodeURIComponent(card.qrcodeText || '');
+    const size = card.qrcodeSize || 160;
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>📱</span><span class="wsw-card-title">' + this.esc(card.name || '二维码') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editQrcode" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-container-body" style="padding:14px;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px">' +
+        '<img src="https://api.qrserver.com/v1/create-qr-code/?size=' + size + 'x' + size + '&data=' + text + '" width="' + size + '" height="' + size + '" style="display:block" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'">' +
+        '<div style="display:none;padding:20px;background:#eee;text-align:center;font-size:11px;color:#666">二维码加载失败<br>请检查网络</div>' +
+        '<div style="font-size:10px;color:#666;max-width:100%;word-break:break-all;text-align:center">' + this.esc(card.qrcodeText || '') + '</div>' +
+      '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  // ===== 第二批新增卡片渲染方法 =====
+  renderGaugeCard(card) {
+    const val = Math.max(0, Math.min(card.gaugeMax || 100, card.gaugeValue || 0));
+    const max = card.gaugeMax || 100;
+    const pct = val / max;
+    const color = card.gaugeColor || '#4fc3f7';
+    // 半圆 SVG gauge
+    const cx = 100, cy = 100, r = 80;
+    const startAngle = Math.PI;  // 180°
+    const endAngle = 0;          // 0°
+    const valueAngle = Math.PI - pct * Math.PI;
+    // 背景弧
+    const bgPath = this._arcPath(cx, cy, r, startAngle, endAngle);
+    // 数值弧
+    const valPath = this._arcPath(cx, cy, r, startAngle, valueAngle);
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>🎛</span><span class="wsw-card-title">' + this.esc(card.name || '仪表盘') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editGauge" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-container-body" style="padding:10px;background:#0a0a1a;display:flex;flex-direction:column;align-items:center;justify-content:center">' +
+        '<svg width="200" height="120" viewBox="0 0 200 120">' +
+          '<path d="' + bgPath + '" fill="none" stroke="#1a1a2e" stroke-width="14" stroke-linecap="round"/>' +
+          '<path d="' + valPath + '" fill="none" stroke="' + color + '" stroke-width="14" stroke-linecap="round" style="filter:drop-shadow(0 0 6px ' + color + ')"/>' +
+          '<text x="100" y="90" text-anchor="middle" fill="' + color + '" font-size="28" font-weight="700" font-family="Consolas,monospace">' + this.esc(String(val)) + '<tspan font-size="14" fill="#888">' + this.esc(card.gaugeUnit || '') + '</tspan></text>' +
+        '</svg>' +
+        '<div style="font-size:11px;color:#888;margin-top:-4px">' + this.esc(card.gaugeLabel || '') + '</div>' +
+      '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  // SVG 圆弧路径辅助函数（角度单位为弧度，从 startAngle 到 endAngle）
+  _arcPath(cx, cy, r, startAngle, endAngle) {
+    const x1 = cx + r * Math.cos(startAngle);
+    const y1 = cy + r * Math.sin(startAngle);
+    const x2 = cx + r * Math.cos(endAngle);
+    const y2 = cy + r * Math.sin(endAngle);
+    const largeArc = Math.abs(endAngle - startAngle) > Math.PI ? 1 : 0;
+    // sweep flag: 1 为顺时针（在 SVG y 轴向下的坐标系中）
+    const sweep = endAngle < startAngle ? 1 : 0;
+    return 'M ' + x1 + ' ' + y1 + ' A ' + r + ' ' + r + ' 0 ' + largeArc + ' ' + sweep + ' ' + x2 + ' ' + y2;
+  },
+
+  renderStatCard(card) {
+    const items = card.statItems || [];
+    const cells = items.map(it => {
+      const isUp = (it.sub || '').startsWith('+');
+      const subColor = isUp ? '#4dd0c8' : '#ef5350';
+      return '<div style="flex:1;padding:10px 8px;border-right:1px solid #1a1a2e;display:flex;flex-direction:column;justify-content:center">' +
+        '<div style="font-size:10px;color:#888;margin-bottom:4px">' + this.esc(it.label) + '</div>' +
+        '<div style="font-size:20px;font-weight:700;color:' + (it.color || '#4fc3f7') + ';font-family:Consolas,monospace">' + this.esc(it.value) + '</div>' +
+        '<div style="font-size:10px;color:' + subColor + ';margin-top:2px">' + this.esc(it.sub || '') + '</div>' +
+      '</div>';
+    }).join('');
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>🔢</span><span class="wsw-card-title">' + this.esc(card.name || '统计卡') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editStat" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-container-body" style="padding:0;background:#0a0a1a;display:flex">' + cells + '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  renderCompareCard(card) {
+    const leftItems = (card.compareLeftItems || []).map(it => '<div style="padding:6px 0;border-bottom:1px solid #1a1a2e;font-size:12px;color:#ccc;display:flex;align-items:center;gap:6px"><span style="color:#ef5350">✗</span>' + this.esc(it) + '</div>').join('');
+    const rightItems = (card.compareRightItems || []).map(it => '<div style="padding:6px 0;border-bottom:1px solid #1a1a2e;font-size:12px;color:#ccc;display:flex;align-items:center;gap:6px"><span style="color:#4dd0c8">✓</span>' + this.esc(it) + '</div>').join('');
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>⚖️</span><span class="wsw-card-title">' + this.esc(card.name || '对比卡') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editCompare" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-container-body" style="padding:12px;background:#0a0a1a">' +
+        '<div style="display:flex;gap:12px">' +
+          '<div style="flex:1">' +
+            '<div style="font-size:13px;font-weight:600;color:#ef5350;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #ef5350">' + this.esc(card.compareLeftTitle || 'A') + '</div>' +
+            leftItems +
+          '</div>' +
+          '<div style="width:1px;background:#2a2a3a"></div>' +
+          '<div style="flex:1">' +
+            '<div style="font-size:13px;font-weight:600;color:#4dd0c8;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #4dd0c8">' + this.esc(card.compareRightTitle || 'B') + '</div>' +
+            rightItems +
+          '</div>' +
+        '</div>' +
+        (card.compareVerdict ? '<div style="margin-top:10px;padding:8px;background:rgba(79,195,247,0.1);border-left:3px solid #4fc3f7;font-size:11px;color:#4fc3f7">' + this.esc(card.compareVerdict) + '</div>' : '') +
+      '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  renderFunnelCard(card) {
+    const stages = card.funnelStages || [];
+    if (stages.length === 0) return '<div class="wsw-card-header"><span>🔻 漏斗图</span></div><div class="wsw-container-body">无数据</div>';
+    const maxVal = Math.max(...stages.map(s => s.value));
+    const bars = stages.map((s, i) => {
+      const pct = (s.value / maxVal) * 100;
+      const conv = i === 0 ? 100 : (s.value / stages[i - 1].value * 100).toFixed(1);
+      return '<div style="margin-bottom:6px">' +
+        '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px"><span style="color:#ccc">' + this.esc(s.name) + '</span><span style="color:' + (s.color || '#4fc3f7') + ';font-family:monospace">' + s.value + ' (' + conv + '%)</span></div>' +
+        '<div style="height:18px;background:#1a1a2e;border-radius:3px;overflow:hidden;position:relative">' +
+          '<div style="height:100%;width:' + pct + '%;background:' + (s.color || '#4fc3f7') + ';border-radius:3px;transition:width .4s;box-shadow:0 0 6px ' + (s.color || '#4fc3f7') + '"></div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>🔻</span><span class="wsw-card-title">' + this.esc(card.name || '漏斗图') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editFunnel" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-container-body" style="padding:14px;background:#0a0a1a;overflow-y:auto">' + bars + '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  renderFlowCard(card) {
+    const steps = card.flowSteps || [];
+    if (steps.length === 0) return '<div class="wsw-card-header"><span>🔀 流程图</span></div><div class="wsw-container-body">无步骤</div>';
+    const cells = steps.map((s, i) => {
+      const isLast = i === steps.length - 1;
+      return '<div style="display:flex;align-items:center;flex-shrink:0">' +
+        '<div style="padding:10px 14px;background:' + (s.color || '#4fc3f7') + '22;border:1px solid ' + (s.color || '#4fc3f7') + ';border-radius:6px;text-align:center;min-width:80px">' +
+          '<div style="font-size:12px;font-weight:600;color:' + (s.color || '#4fc3f7') + '">' + this.esc(s.name) + '</div>' +
+          '<div style="font-size:10px;color:#888;margin-top:2px">' + this.esc(s.desc || '') + '</div>' +
+        '</div>' +
+        (isLast ? '' : '<div style="color:' + (s.color || '#4fc3f7') + ';font-size:16px;margin:0 4px">→</div>') +
+      '</div>';
+    }).join('');
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>🔀</span><span class="wsw-card-title">' + this.esc(card.name || '流程图') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+      '<button class="wsw-md-btn" data-action="editFlow" data-id="' + card.id + '" title="编辑">✏️</button>' +
+      this.cardDeleteBtn(card.id) + '</div></div>' +
+      '<div class="wsw-container-body" style="padding:14px;background:#0a0a1a;display:flex;align-items:center;overflow-x:auto">' + cells + '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  renderHtmlBlock(card) {
+    // 为每个 htmlBlock 生成唯一作用域 ID，避免 CSS 互相污染
+    const scopeId = 'htmlblock_' + card.id;
+    const htmlContent = card.htmlContent || '<div style="padding:20px;text-align:center;color:#888;"><h3>HTML 块</h3><p>双击编辑 HTML/CSS 内容</p></div>';
+    const cssContent = card.cssContent || '';
+
+    // 将 cssContent 中的选择器作用域化（简单方案：在每条规则前加 #scopeId）
+    // 为了兼容用户直接写的 CSS，采用 shadow DOM 隔离方案最稳，但为简化实现使用 scoped wrapper
+    let scopedCss = '';
+    if (cssContent) {
+      // 简单作用域化：把所有选择器前加 #scopeId 前缀（不完美但够用）
+      scopedCss = cssContent
+        .replace(/\/\*[\s\S]*?\*\//g, '') // 移除注释
+        .replace(/([^^{}@]+)\{/g, (match, selectors) => {
+          // 不处理 @media / @keyframes / @import 等 at-rules
+          if (selectors.trim().startsWith('@')) return match;
+          const scoped = selectors.split(',').map(s => {
+            const t = s.trim();
+            if (!t) return s;
+            // 已经是 #htmlblock_xxx 开头的不重复加
+            if (t.startsWith('#' + scopeId)) return s;
+            return '#' + scopeId + ' ' + t;
+          }).join(', ');
+          return scoped + ' {';
+        });
+    }
+
+    const bodyHtml =
+      '<div id="' + scopeId + '" class="wsw-htmlblock-body">' +
+        (scopedCss ? '<style>' + scopedCss + '</style>' : '') +
+        htmlContent +
+      '</div>';
+
+    return '<div class="wsw-card-header" data-action="drag">' +
+      '<span>🧩</span>' +
+      '<span class="wsw-card-title">' + this.esc(card.name || 'HTML 块') + '</span>' +
+      '<div class="wsw-md-toolbar">' +
+        '<button class="wsw-md-btn" data-action="editHtmlBlock" data-id="' + card.id + '" title="编辑">✏️</button>' +
+        this.cardDeleteBtn(card.id) +
+      '</div></div>' +
+      '<div class="wsw-container-body wsw-htmlblock-container">' + bodyHtml + '</div>' +
+      '<div class="wsw-resize" data-action="resize"></div>';
+  },
+
+  // 编辑 HTML 块
+  // ===== 新增卡片编辑方法 =====
+  _editInOverlay(html, onSave) {
+    const overlay = document.createElement('div');
+    overlay.className = 'wsw-link-overlay';
+    overlay.innerHTML = '<div class="wsw-link-panel" style="width:460px;max-height:88vh;overflow-y:auto">' +
+      '<div class="wsw-link-header"><span>✏️ 编辑</span><button class="wsw-link-close">✕</button></div>' +
+      '<div class="wsw-link-body" id="editBody"></div>' +
+      '<div class="wsw-link-footer">' +
+        '<button class="wsw-link-btn cancel-btn">取消</button>' +
+        '<button class="wsw-link-btn save-btn primary">保存</button>' +
+      '</div></div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector('#editBody').innerHTML = html;
+    const close = () => overlay.remove();
+    overlay.querySelector('.wsw-link-close').onclick = close;
+    overlay.querySelector('.cancel-btn').onclick = close;
+    overlay.querySelector('.save-btn').onclick = () => { if (onSave(overlay) !== false) close(); };
+    return overlay;
+  },
+
+  editMetricCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'metricCard') return;
+    this.saveUndo();
+    const html =
+      '<div class="wsw-link-section"><label class="wsw-link-label">指标名称</label><input type="text" id="mLabel" value="' + this.esc(card.metricLabel) + '" class="wsw-link-input" style="width:100%"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">数值</label><input type="text" id="mValue" value="' + this.esc(card.metricValue) + '" class="wsw-link-input" style="width:100%"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">单位</label><input type="text" id="mUnit" value="' + this.esc(card.metricUnit) + '" class="wsw-link-input" style="width:100%"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">变化</label><input type="text" id="mChange" value="' + this.esc(card.metricChange) + '" class="wsw-link-input" style="width:100%"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">趋势</label><select id="mTrend" class="wsw-link-select"><option value="up"' + (card.metricTrend === 'up' ? ' selected' : '') + '>▲ 上升</option><option value="down"' + (card.metricTrend === 'down' ? ' selected' : '') + '>▼ 下降</option><option value="flat"' + (card.metricTrend === 'flat' ? ' selected' : '') + '>▶ 持平</option></select></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">颜色</label><input type="color" id="mColor" value="' + (card.metricColor || '#4fc3f7') + '" style="width:60px;height:36px;cursor:pointer;border:1px solid var(--border);border-radius:6px;background:none"></div>';
+    this._editInOverlay(html, (ov) => {
+      card.metricLabel = ov.querySelector('#mLabel').value;
+      card.metricValue = ov.querySelector('#mValue').value;
+      card.metricUnit = ov.querySelector('#mUnit').value;
+      card.metricChange = ov.querySelector('#mChange').value;
+      card.metricTrend = ov.querySelector('#mTrend').value;
+      card.metricColor = ov.querySelector('#mColor').value;
+      this.renderCanvas();
+    });
+  },
+
+  editProgressCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'progressCard') return;
+    this.saveUndo();
+    let itemsHtml = (card.progressItems || []).map((it, i) =>
+      '<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">' +
+        '<input type="text" class="pLabel" value="' + this.esc(it.label) + '" placeholder="标签" style="flex:1;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:12px">' +
+        '<input type="number" class="pValue" value="' + it.value + '" placeholder="值" style="width:70px;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:12px">' +
+        '<input type="color" class="pColor" value="' + (it.color || '#4fc3f7') + '" style="width:34px;height:30px;border:none;background:none;cursor:pointer">' +
+        '<button class="pDel" style="width:28px;height:28px;background:rgba(239,83,80,0.15);color:var(--danger);border:1px solid rgba(239,83,80,0.3);border-radius:4px;cursor:pointer">✕</button>' +
+      '</div>'
+    ).join('');
+    const html =
+      '<div class="wsw-link-section"><label class="wsw-link-label">最大值</label><input type="number" id="pMax" value="' + (card.progressMax || 100) + '" class="wsw-link-input" style="width:100px"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">项目列表</label><div id="pItems">' + itemsHtml + '</div>' +
+        '<button id="pAdd" style="margin-top:6px;padding:6px 12px;background:var(--accent);color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer">+ 添加项目</button></div>';
+    const ov = this._editInOverlay(html, (overlay) => {
+      const rows = overlay.querySelectorAll('#pItems > div');
+      card.progressItems = [];
+      rows.forEach(r => {
+        card.progressItems.push({
+          label: r.querySelector('.pLabel').value,
+          value: parseFloat(r.querySelector('.pValue').value) || 0,
+          color: r.querySelector('.pColor').value
+        });
+      });
+      card.progressMax = parseFloat(overlay.querySelector('#pMax').value) || 100;
+      this.renderCanvas();
+    });
+    // 添加/删除项目
+    ov.querySelector('#pAdd').onclick = () => {
+      const div = document.createElement('div');
+      div.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center';
+      div.innerHTML = '<input type="text" class="pLabel" placeholder="标签" style="flex:1;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:12px"><input type="number" class="pValue" placeholder="值" style="width:70px;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:12px"><input type="color" class="pColor" value="#4fc3f7" style="width:34px;height:30px;border:none;background:none;cursor:pointer"><button class="pDel" style="width:28px;height:28px;background:rgba(239,83,80,0.15);color:var(--danger);border:1px solid rgba(239,83,80,0.3);border-radius:4px;cursor:pointer">✕</button>';
+      ov.querySelector('#pItems').appendChild(div);
+    };
+    ov.querySelector('#pItems').addEventListener('click', (e) => {
+      if (e.target.classList.contains('pDel')) e.target.parentElement.remove();
+    });
+  },
+
+  editTimelineCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'timelineCard') return;
+    this.saveUndo();
+    let itemsHtml = (card.timelineItems || []).map((it, i) =>
+      '<div style="display:flex;gap:6px;margin-bottom:6px;align-items:flex-start;flex-wrap:wrap">' +
+        '<input type="text" class="tTime" value="' + this.esc(it.time) + '" placeholder="时间" style="width:90px;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:11px">' +
+        '<input type="text" class="tTitle" value="' + this.esc(it.title) + '" placeholder="标题" style="width:120px;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:11px">' +
+        '<input type="text" class="tDesc" value="' + this.esc(it.desc) + '" placeholder="描述" style="flex:1;min-width:120px;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:11px">' +
+        '<input type="color" class="tColor" value="' + (it.color || '#4fc3f7') + '" style="width:34px;height:28px;border:none;background:none;cursor:pointer">' +
+        '<button class="tDel" style="width:28px;height:28px;background:rgba(239,83,80,0.15);color:var(--danger);border:1px solid rgba(239,83,80,0.3);border-radius:4px;cursor:pointer">✕</button>' +
+      '</div>'
+    ).join('');
+    const html = '<div class="wsw-link-section"><label class="wsw-link-label">事件列表</label><div id="tItems">' + itemsHtml + '</div>' +
+      '<button id="tAdd" style="margin-top:6px;padding:6px 12px;background:var(--accent);color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer">+ 添加事件</button></div>';
+    const ov = this._editInOverlay(html, (overlay) => {
+      const rows = overlay.querySelectorAll('#tItems > div');
+      card.timelineItems = [];
+      rows.forEach(r => {
+        card.timelineItems.push({
+          time: r.querySelector('.tTime').value,
+          title: r.querySelector('.tTitle').value,
+          desc: r.querySelector('.tDesc').value,
+          color: r.querySelector('.tColor').value
+        });
+      });
+      this.renderCanvas();
+    });
+    ov.querySelector('#tAdd').onclick = () => {
+      const div = document.createElement('div');
+      div.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:flex-start;flex-wrap:wrap';
+      div.innerHTML = '<input type="text" class="tTime" placeholder="时间" style="width:90px;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:11px"><input type="text" class="tTitle" placeholder="标题" style="width:120px;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:11px"><input type="text" class="tDesc" placeholder="描述" style="flex:1;min-width:120px;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:11px"><input type="color" class="tColor" value="#4fc3f7" style="width:34px;height:28px;border:none;background:none;cursor:pointer"><button class="tDel" style="width:28px;height:28px;background:rgba(239,83,80,0.15);color:var(--danger);border:1px solid rgba(239,83,80,0.3);border-radius:4px;cursor:pointer">✕</button>';
+      ov.querySelector('#tItems').appendChild(div);
+    };
+    ov.querySelector('#tItems').addEventListener('click', (e) => {
+      if (e.target.classList.contains('tDel')) e.target.parentElement.remove();
+    });
+  },
+
+  editDividerCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'dividerCard') return;
+    this.saveUndo();
+    const html =
+      '<div class="wsw-link-section"><label class="wsw-link-label">文字</label><input type="text" id="dText" value="' + this.esc(card.dividerText) + '" class="wsw-link-input" style="width:100%"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">颜色</label><input type="color" id="dColor" value="' + (card.dividerColor || '#4fc3f7') + '" style="width:60px;height:36px;cursor:pointer;border:1px solid var(--border);border-radius:6px;background:none"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">样式</label><select id="dStyle" class="wsw-link-select"><option value="line"' + (card.dividerStyle === 'line' ? ' selected' : '') + '>实线</option><option value="dots"' + (card.dividerStyle === 'dots' ? ' selected' : '') + '>点线</option><option value="gradient"' + (card.dividerStyle === 'gradient' ? ' selected' : '') + '>渐变</option></select></div>';
+    this._editInOverlay(html, (ov) => {
+      card.dividerText = ov.querySelector('#dText').value;
+      card.dividerColor = ov.querySelector('#dColor').value;
+      card.dividerStyle = ov.querySelector('#dStyle').value;
+      this.renderCanvas();
+    });
+  },
+
+  editCalloutCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'calloutCard') return;
+    this.saveUndo();
+    const html =
+      '<div class="wsw-link-section"><label class="wsw-link-label">文本</label><textarea id="cText" class="wsw-link-input" style="width:100%;min-height:80px">' + this.esc(card.calloutText) + '</textarea></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">类型</label><select id="cType" class="wsw-link-select"><option value="info"' + (card.calloutType === 'info' ? ' selected' : '') + '>ℹ️ 信息</option><option value="warning"' + (card.calloutType === 'warning' ? ' selected' : '') + '>⚠️ 警告</option><option value="success"' + (card.calloutType === 'success' ? ' selected' : '') + '>✅ 成功</option><option value="danger"' + (card.calloutType === 'danger' ? ' selected' : '') + '>❌ 错误</option></select></div>';
+    this._editInOverlay(html, (ov) => {
+      card.calloutText = ov.querySelector('#cText').value;
+      card.calloutType = ov.querySelector('#cType').value;
+      this.renderCanvas();
+    });
+  },
+
+  editRadarCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'radarCard') return;
+    this.saveUndo();
+    const labels = card.radarLabels || [];
+    const values = card.radarValues || [];
+    let rowsHtml = labels.map((label, i) =>
+      '<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">' +
+        '<input type="text" class="rLabel" value="' + this.esc(label) + '" placeholder="维度名" style="flex:1;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:12px">' +
+        '<input type="number" class="rValue" value="' + (values[i] || 0) + '" placeholder="值" style="width:70px;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:12px">' +
+        '<button class="rDel" style="width:28px;height:28px;background:rgba(239,83,80,0.15);color:var(--danger);border:1px solid rgba(239,83,80,0.3);border-radius:4px;cursor:pointer">✕</button>' +
+      '</div>'
+    ).join('');
+    const html =
+      '<div class="wsw-link-section"><label class="wsw-link-label">最大值</label><input type="number" id="rMax" value="' + (card.radarMax || 100) + '" class="wsw-link-input" style="width:100px"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">维度</label><div id="rItems">' + rowsHtml + '</div>' +
+        '<button id="rAdd" style="margin-top:6px;padding:6px 12px;background:var(--accent);color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer">+ 添加维度</button></div>';
+    const ov = this._editInOverlay(html, (overlay) => {
+      const rows = overlay.querySelectorAll('#rItems > div');
+      card.radarLabels = [];
+      card.radarValues = [];
+      rows.forEach(r => {
+        card.radarLabels.push(r.querySelector('.rLabel').value);
+        card.radarValues.push(parseFloat(r.querySelector('.rValue').value) || 0);
+      });
+      card.radarMax = parseFloat(overlay.querySelector('#rMax').value) || 100;
+      this.renderCanvas();
+    });
+    ov.querySelector('#rAdd').onclick = () => {
+      const div = document.createElement('div');
+      div.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center';
+      div.innerHTML = '<input type="text" class="rLabel" placeholder="维度名" style="flex:1;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:12px"><input type="number" class="rValue" placeholder="值" style="width:70px;padding:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:12px"><button class="rDel" style="width:28px;height:28px;background:rgba(239,83,80,0.15);color:var(--danger);border:1px solid rgba(239,83,80,0.3);border-radius:4px;cursor:pointer">✕</button>';
+      ov.querySelector('#rItems').appendChild(div);
+    };
+    ov.querySelector('#rItems').addEventListener('click', (e) => {
+      if (e.target.classList.contains('rDel')) e.target.parentElement.remove();
+    });
+  },
+
+  editQrcodeCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'qrcodeCard') return;
+    this.saveUndo();
+    const html =
+      '<div class="wsw-link-section"><label class="wsw-link-label">文本/URL</label><textarea id="qText" class="wsw-link-input" style="width:100%;min-height:60px">' + this.esc(card.qrcodeText) + '</textarea></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">尺寸</label><input type="number" id="qSize" value="' + (card.qrcodeSize || 160) + '" class="wsw-link-input" style="width:100px"></div>';
+    this._editInOverlay(html, (ov) => {
+      card.qrcodeText = ov.querySelector('#qText').value;
+      card.qrcodeSize = parseInt(ov.querySelector('#qSize').value) || 160;
+      this.renderCanvas();
+    });
+  },
+
+  // ===== 第二批新增卡片编辑方法 =====
+  editGaugeCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'gaugeCard') return;
+    this.saveUndo();
+    const html =
+      '<div class="wsw-link-section"><label class="wsw-link-label">标签</label><input type="text" id="gLabel" value="' + this.esc(card.gaugeLabel) + '" class="wsw-link-input" style="width:100%"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">当前值</label><input type="number" id="gValue" value="' + (card.gaugeValue || 0) + '" class="wsw-link-input" style="width:100px"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">最大值</label><input type="number" id="gMax" value="' + (card.gaugeMax || 100) + '" class="wsw-link-input" style="width:100px"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">单位</label><input type="text" id="gUnit" value="' + this.esc(card.gaugeUnit) + '" class="wsw-link-input" style="width:80px"></div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">颜色</label><input type="color" id="gColor" value="' + (card.gaugeColor || '#4fc3f7') + '" style="width:60px;height:36px;cursor:pointer;border:1px solid var(--border);border-radius:6px;background:none"></div>';
+    this._editInOverlay(html, (ov) => {
+      card.gaugeLabel = ov.querySelector('#gLabel').value;
+      card.gaugeValue = parseFloat(ov.querySelector('#gValue').value) || 0;
+      card.gaugeMax = parseFloat(ov.querySelector('#gMax').value) || 100;
+      card.gaugeUnit = ov.querySelector('#gUnit').value;
+      card.gaugeColor = ov.querySelector('#gColor').value;
+      this.renderCanvas();
+    });
+  },
+
+  editStatCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'statCard') return;
+    this.saveUndo();
+    const items = card.statItems || [];
+    const rows = items.map((it, i) =>
+      '<div class="wsw-link-section" style="display:flex;gap:6px;align-items:center">' +
+        '<input type="text" class="wsw-link-input" id="sLabel' + i + '" value="' + this.esc(it.label) + '" placeholder="标签" style="flex:1">' +
+        '<input type="text" class="wsw-link-input" id="sValue' + i + '" value="' + this.esc(it.value) + '" placeholder="数值" style="flex:1">' +
+        '<input type="text" class="wsw-link-input" id="sSub' + i + '" value="' + this.esc(it.sub || '') + '" placeholder="变化" style="width:80px">' +
+        '<input type="color" id="sColor' + i + '" value="' + (it.color || '#4fc3f7') + '" style="width:36px;height:32px;cursor:pointer;border:1px solid var(--border);border-radius:4px;background:none">' +
+      '</div>'
+    ).join('');
+    const html = '<div class="wsw-link-section"><label class="wsw-link-label">指标项（标签 / 数值 / 变化 / 颜色）</label></div>' + rows;
+    this._editInOverlay(html, (ov) => {
+      card.statItems = items.map((_, i) => ({
+        label: ov.querySelector('#sLabel' + i).value,
+        value: ov.querySelector('#sValue' + i).value,
+        sub: ov.querySelector('#sSub' + i).value,
+        color: ov.querySelector('#sColor' + i).value
+      }));
+      this.renderCanvas();
+    });
+  },
+
+  editCompareCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'compareCard') return;
+    this.saveUndo();
+    const leftHtml = (card.compareLeftItems || []).map((it, i) => '<input type="text" class="wsw-link-input" id="cL' + i + '" value="' + this.esc(it) + '" style="width:100%;margin-bottom:4px">').join('');
+    const rightHtml = (card.compareRightItems || []).map((it, i) => '<input type="text" class="wsw-link-input" id="cR' + i + '" value="' + this.esc(it) + '" style="width:100%;margin-bottom:4px">').join('');
+    const html =
+      '<div style="display:flex;gap:12px">' +
+        '<div style="flex:1"><div class="wsw-link-label">左栏标题</div><input type="text" id="cLT" value="' + this.esc(card.compareLeftTitle) + '" class="wsw-link-input" style="width:100%;margin-bottom:8px">' + leftHtml + '</div>' +
+        '<div style="flex:1"><div class="wsw-link-label">右栏标题</div><input type="text" id="cRT" value="' + this.esc(card.compareRightTitle) + '" class="wsw-link-input" style="width:100%;margin-bottom:8px">' + rightHtml + '</div>' +
+      '</div>' +
+      '<div class="wsw-link-section"><label class="wsw-link-label">结论</label><input type="text" id="cV" value="' + this.esc(card.compareVerdict || '') + '" class="wsw-link-input" style="width:100%"></div>';
+    this._editInOverlay(html, (ov) => {
+      card.compareLeftTitle = ov.querySelector('#cLT').value;
+      card.compareRightTitle = ov.querySelector('#cRT').value;
+      card.compareLeftItems = (card.compareLeftItems || []).map((_, i) => ov.querySelector('#cL' + i).value);
+      card.compareRightItems = (card.compareRightItems || []).map((_, i) => ov.querySelector('#cR' + i).value);
+      card.compareVerdict = ov.querySelector('#cV').value;
+      this.renderCanvas();
+    });
+  },
+
+  editFunnelCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'funnelCard') return;
+    this.saveUndo();
+    const stages = card.funnelStages || [];
+    const rows = stages.map((s, i) =>
+      '<div class="wsw-link-section" style="display:flex;gap:6px;align-items:center">' +
+        '<input type="text" class="wsw-link-input" id="fName' + i + '" value="' + this.esc(s.name) + '" placeholder="阶段名" style="flex:1">' +
+        '<input type="number" class="wsw-link-input" id="fVal' + i + '" value="' + s.value + '" placeholder="数值" style="width:100px">' +
+        '<input type="color" id="fColor' + i + '" value="' + (s.color || '#4fc3f7') + '" style="width:36px;height:32px;cursor:pointer;border:1px solid var(--border);border-radius:4px;background:none">' +
+      '</div>'
+    ).join('');
+    this._editInOverlay('<div class="wsw-link-section"><label class="wsw-link-label">漏斗阶段（名称 / 数值 / 颜色）</label></div>' + rows, (ov) => {
+      card.funnelStages = stages.map((_, i) => ({
+        name: ov.querySelector('#fName' + i).value,
+        value: parseInt(ov.querySelector('#fVal' + i).value) || 0,
+        color: ov.querySelector('#fColor' + i).value
+      }));
+      this.renderCanvas();
+    });
+  },
+
+  editFlowCard(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'flowCard') return;
+    this.saveUndo();
+    const steps = card.flowSteps || [];
+    const rows = steps.map((s, i) =>
+      '<div class="wsw-link-section" style="display:flex;gap:6px;align-items:center">' +
+        '<input type="text" class="wsw-link-input" id="flName' + i + '" value="' + this.esc(s.name) + '" placeholder="步骤名" style="flex:1">' +
+        '<input type="text" class="wsw-link-input" id="flDesc' + i + '" value="' + this.esc(s.desc || '') + '" placeholder="说明" style="flex:1">' +
+        '<input type="color" id="flColor' + i + '" value="' + (s.color || '#4fc3f7') + '" style="width:36px;height:32px;cursor:pointer;border:1px solid var(--border);border-radius:4px;background:none">' +
+      '</div>'
+    ).join('');
+    this._editInOverlay('<div class="wsw-link-section"><label class="wsw-link-label">流程步骤（名称 / 说明 / 颜色）</label></div>' + rows, (ov) => {
+      card.flowSteps = steps.map((_, i) => ({
+        name: ov.querySelector('#flName' + i).value,
+        desc: ov.querySelector('#flDesc' + i).value,
+        color: ov.querySelector('#flColor' + i).value
+      }));
+      this.renderCanvas();
+    });
+  },
+
+  editHtmlBlock(cardId) {
+    const card = this.state.doc.cards.find(c => c.id === cardId);
+    if (!card || card.type !== 'htmlBlock') return;
+    this.saveUndo();
+
+    // 弹出编辑对话框
+    const existing = document.getElementById('wswHtmlBlockEditor');
+    if (existing) existing.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'wswHtmlBlockEditor';
+    panel.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10001;display:flex;align-items:center;justify-content:center;font-family:"Microsoft YaHei",sans-serif;';
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:var(--surface,#16162a);border:1px solid var(--border,#2a2a45);border-radius:10px;width:760px;max-width:92vw;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden;';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'padding:14px 20px;border-bottom:1px solid var(--border,#2a2a45);display:flex;justify-content:space-between;align-items:center;';
+    header.innerHTML = '<div style="font-size:14px;font-weight:600;color:var(--text,#e0e0ee);">✏️ 编辑 HTML 块</div>';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'background:none;border:none;color:var(--text2,#8888a8);font-size:16px;cursor:pointer;padding:4px 8px;';
+    closeBtn.onclick = () => panel.remove();
+    header.appendChild(closeBtn);
+    dialog.appendChild(header);
+
+    const content = document.createElement('div');
+    content.style.cssText = 'padding:16px 20px;display:flex;flex-direction:column;gap:12px;flex:1;overflow:hidden;';
+
+    // HTML 输入区
+    const htmlLabel = document.createElement('label');
+    htmlLabel.style.cssText = 'font-size:12px;color:var(--accent,#b39ddb);font-weight:600;';
+    htmlLabel.textContent = 'HTML 内容';
+    content.appendChild(htmlLabel);
+
+    const htmlTextarea = document.createElement('textarea');
+    htmlTextarea.value = card.htmlContent || '';
+    htmlTextarea.style.cssText = 'width:100%;height:240px;background:var(--bg,#0f0f1a);color:var(--text,#e0e0ee);border:1px solid var(--border,#2a2a45);border-radius:6px;padding:10px;font-family:Consolas,Monaco,monospace;font-size:11px;resize:vertical;outline:none;';
+    content.appendChild(htmlTextarea);
+
+    // CSS 输入区
+    const cssLabel = document.createElement('label');
+    cssLabel.style.cssText = 'font-size:12px;color:var(--accent,#b39ddb);font-weight:600;';
+    cssLabel.textContent = 'CSS 内容（自动作用域到本卡片）';
+    content.appendChild(cssLabel);
+
+    const cssTextarea = document.createElement('textarea');
+    cssTextarea.value = card.cssContent || '';
+    cssTextarea.style.cssText = 'width:100%;height:140px;background:var(--bg,#0f0f1a);color:var(--text,#e0e0ee);border:1px solid var(--border,#2a2a45);border-radius:6px;padding:10px;font-family:Consolas,Monaco,monospace;font-size:11px;resize:vertical;outline:none;';
+    content.appendChild(cssTextarea);
+
+    // 预览区
+    const previewLabel = document.createElement('div');
+    previewLabel.style.cssText = 'font-size:12px;color:var(--accent,#b39ddb);font-weight:600;';
+    previewLabel.textContent = '实时预览';
+    content.appendChild(previewLabel);
+
+    const preview = document.createElement('div');
+    preview.style.cssText = 'background:#fff;border:1px solid var(--border,#2a2a45);border-radius:6px;padding:10px;overflow:auto;flex:1;min-height:120px;max-height:200px;';
+    content.appendChild(preview);
+
+    const updatePreview = () => {
+      const scopeId = 'htmlblock_' + card.id;
+      let scopedCss = '';
+      const css = cssTextarea.value;
+      if (css) {
+        scopedCss = css
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/([^^{}@]+)\{/g, (match, selectors) => {
+            if (selectors.trim().startsWith('@')) return match;
+            const scoped = selectors.split(',').map(s => {
+              const t = s.trim();
+              if (!t) return s;
+              if (t.startsWith('#' + scopeId)) return s;
+              return '#' + scopeId + ' ' + t;
+            }).join(', ');
+            return scoped + ' {';
+          });
+      }
+      preview.innerHTML = '<div id="' + scopeId + '">' + (scopedCss ? '<style>' + scopedCss + '</style>' : '') + htmlTextarea.value + '</div>';
+    };
+    htmlTextarea.oninput = updatePreview;
+    cssTextarea.oninput = updatePreview;
+    updatePreview();
+
+    dialog.appendChild(content);
+
+    const footer = document.createElement('div');
+    footer.style.cssText = 'padding:12px 20px;border-top:1px solid var(--border,#2a2a45);display:flex;justify-content:flex-end;gap:8px;';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = '取消';
+    cancelBtn.style.cssText = 'padding:7px 16px;background:transparent;color:var(--text2,#8888a8);border:1px solid var(--border,#2a2a45);border-radius:4px;font-size:12px;cursor:pointer;';
+    cancelBtn.onclick = () => panel.remove();
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = '💾 保存';
+    saveBtn.style.cssText = 'padding:7px 16px;background:var(--primary,#4fc3f7);color:var(--bg,#0f0f1a);border:none;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;';
+    saveBtn.onclick = () => {
+      card.htmlContent = htmlTextarea.value;
+      card.cssContent = cssTextarea.value;
+      if (card.timestamp) card.timestamp.lastUpdated = Date.now();
+      panel.remove();
+      this.renderCanvas();
+      App.showToast('HTML 块已保存');
+    };
+    footer.appendChild(cancelBtn);
+    footer.appendChild(saveBtn);
+    dialog.appendChild(footer);
+
+    panel.appendChild(dialog);
+    panel.addEventListener('click', (e) => { if (e.target === panel) panel.remove(); });
+    document.body.appendChild(panel);
+
+    setTimeout(() => htmlTextarea.focus(), 100);
   },
 
   // ===== Task 16: AI 工作流容器渲染 =====
@@ -5975,6 +8976,32 @@ applyBackground();renderCards();renderAllCharts();setTimeout(()=>{fitView();show
     } else if (action === 'openAiworkflowResult') {
       // Task 16: 查看完整结果（跳转到 AI 工作流模块）
       this.openAiworkflowResultPanel(id);
+    } else if (action === 'editHtmlBlock') {
+      this.editHtmlBlock(id);
+    } else if (action === 'editMetric') {
+      this.editMetricCard(id);
+    } else if (action === 'editProgress') {
+      this.editProgressCard(id);
+    } else if (action === 'editTimeline') {
+      this.editTimelineCard(id);
+    } else if (action === 'editDivider') {
+      this.editDividerCard(id);
+    } else if (action === 'editCallout') {
+      this.editCalloutCard(id);
+    } else if (action === 'editRadar') {
+      this.editRadarCard(id);
+    } else if (action === 'editQrcode') {
+      this.editQrcodeCard(id);
+    } else if (action === 'editGauge') {
+      this.editGaugeCard(id);
+    } else if (action === 'editStat') {
+      this.editStatCard(id);
+    } else if (action === 'editCompare') {
+      this.editCompareCard(id);
+    } else if (action === 'editFunnel') {
+      this.editFunnelCard(id);
+    } else if (action === 'editFlow') {
+      this.editFlowCard(id);
     }
   },
 
@@ -6011,6 +9038,15 @@ applyBackground();renderCards();renderAllCharts();setTimeout(()=>{fitView();show
         '<div class="wsw-ctx-item" onclick="WSWEditor.addExcelContainer();WSWEditor.hideContextMenu()">📊 Excel容器</div>' +
         '<div class="wsw-ctx-item" onclick="WSWEditor.addChartCard();WSWEditor.hideContextMenu()">📈 统计图</div>' +
         '<div class="wsw-ctx-item" onclick="WSWEditor.addAiworkflowContainer();WSWEditor.hideContextMenu()">🤖 AI 工作流容器</div>' +
+        '<div class="wsw-ctx-sep"></div>' +
+        '<div class="wsw-ctx-item" onclick="WSWEditor.addMetricCard();WSWEditor.hideContextMenu()">📌 指标卡</div>' +
+        '<div class="wsw-ctx-item" onclick="WSWEditor.addGaugeCard();WSWEditor.hideContextMenu()">🎛 仪表盘</div>' +
+        '<div class="wsw-ctx-item" onclick="WSWEditor.addStatCard();WSWEditor.hideContextMenu()">🔢 统计卡</div>' +
+        '<div class="wsw-ctx-item" onclick="WSWEditor.addCompareCard();WSWEditor.hideContextMenu()">⚖️ 对比卡</div>' +
+        '<div class="wsw-ctx-item" onclick="WSWEditor.addFunnelCard();WSWEditor.hideContextMenu()">🔻 漏斗图</div>' +
+        '<div class="wsw-ctx-item" onclick="WSWEditor.addFlowCard();WSWEditor.hideContextMenu()">🔀 流程图</div>' +
+        '<div class="wsw-ctx-item" onclick="WSWEditor.addTimelineCard();WSWEditor.hideContextMenu()">📅 时间轴</div>' +
+        '<div class="wsw-ctx-item" onclick="WSWEditor.addRadarCard();WSWEditor.hideContextMenu()">🎯 雷达图</div>' +
       '</div></div>';
 
     // 导入工作流卡片内容

@@ -4477,9 +4477,12 @@ function createWindow() {
       const readonly = params.readonly !== false; // 默认只读
       if (enabled) {
         startMcpServer(readonly);
+        // 持久化状态：下次启动应用时自动启动 MCP
+        saveSettings({ mcpAutoStart: true, mcpReadonly: readonly });
         return { success: true, data: { running: true, readonly: readonly, startedAt: mcpServerInstance.startedAt } };
       } else {
         stopMcpServer();
+        saveSettings({ mcpAutoStart: false, mcpReadonly: readonly });
         return { success: true, data: { running: false } };
       }
     } catch (e) {
@@ -4512,6 +4515,8 @@ function createWindow() {
   ipcMain.handle('mcp-set-readonly', async (event, readonly) => {
     try {
       const wasRunning = !!(mcpServerInstance && mcpServerInstance.child && !mcpServerInstance.child.killed);
+      // 持久化只读模式设置
+      saveSettings({ mcpReadonly: !!readonly });
       if (wasRunning) {
         stopMcpServer();
         // 等待子进程退出
@@ -4540,6 +4545,43 @@ function createWindow() {
       return { success: false, error: e.message || String(e) };
     }
   });
+
+  // MCP 自启动配置 IPC（持久化在 settings.json）
+  ipcMain.handle('mcp-get-autostart', async () => {
+    try {
+      const s = loadSettings();
+      return { success: true, data: !!s.mcpAutoStart };
+    } catch (e) {
+      return { success: false, error: e.message || String(e) };
+    }
+  });
+  ipcMain.handle('mcp-set-autostart', async (event, enabled) => {
+    try {
+      saveSettings({ mcpAutoStart: !!enabled });
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message || String(e) };
+    }
+  });
+
+  // ============ 应用启动时自动启动 MCP（根据 settings.json 持久化状态） ============
+  try {
+    const savedSettings = loadSettings();
+    if (savedSettings.mcpAutoStart) {
+      const savedReadonly = savedSettings.mcpReadonly !== false; // 默认只读
+      // 延迟 1 秒启动，避免与窗口初始化竞争资源
+      setTimeout(() => {
+        try {
+          startMcpServer(savedReadonly);
+          console.log('[MCP] 自动启动完成（readonly=' + savedReadonly + '）');
+        } catch (e) {
+          console.error('[MCP] 自动启动失败:', e);
+        }
+      }, 1000);
+    }
+  } catch (e) {
+    console.error('[MCP] 读取自动启动配置失败:', e);
+  }
 }
 
 function setupContextMenu() {

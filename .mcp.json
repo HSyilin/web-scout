@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "web-scout": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/src/main/mcp-standalone.js"
+      ],
+      "env": {
+        "MCP_READONLY": "false"
+      },
+      "type": "stdio"
+    }
+  }
+}

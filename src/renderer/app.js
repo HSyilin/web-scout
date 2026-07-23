@@ -487,8 +487,11 @@ const App = {
     }
 
     // 加载模块数据
-    if (module === 'dashboard' && typeof loadDashboardStats === 'function') {
-      loadDashboardStats();
+    if (module === 'settings') {
+      // 切换到全局设置模块时刷新所有设置项
+      if (typeof this.loadSettingsModule === 'function') {
+        this.loadSettingsModule();
+      }
     } else if (module === 'workflow' && typeof Workflow?.loadList === 'function') {
       Workflow.loadList();
     } else if (module === 'aiworkflow' && typeof AIWorkflow?.loadList === 'function') {
@@ -771,11 +774,441 @@ const App = {
   },
 
   toggleShowResourceLayer() {
-    const checkbox = document.getElementById('showResourceLayerToggle');
+    const checkbox = document.getElementById('showResourceLayerToggle') || document.getElementById('settingsShowResourceLayerToggle');
     this.state.showResourceLayer = checkbox.checked;
     this.saveSettings();
     this.updateResourceLayerVisibility();
   },
+
+  // ============ 全局设置模块（替代仪表盘） ============
+
+  // 切换到全局设置模块时加载所有设置项
+  async loadSettingsModule() {
+    // 同步外观开关
+    const lightToggle = document.getElementById('settingsLightThemeToggle');
+    if (lightToggle) lightToggle.checked = this.state.theme === 'light';
+    const resToggle = document.getElementById('settingsShowResourceLayerToggle');
+    if (resToggle) resToggle.checked = this.state.showResourceLayer;
+
+    // 加载 MCP 状态
+    await this.initSettingsMcpStatus();
+    // 加载存储目录
+    await this.loadSettingsDirs();
+    // 加载 AI 配置
+    await this.loadSettingsAiConfig();
+    // 加载数据目录路径
+    await this.loadSettingsDataDir();
+  },
+
+  // ===== MCP 状态（设置模块） =====
+  async initSettingsMcpStatus() {
+    if (!window.electronAPI?.mcpAPI) return;
+    try {
+      const result = await window.electronAPI.mcpAPI.getStatus();
+      if (result && result.success) {
+        this.updateSettingsMcpUI(result.data);
+      }
+      // 加载自启动配置（从主进程 settings）
+      const autoStartResult = await window.electronAPI?.getMcpAutostart?.();
+      const autoToggle = document.getElementById('settingsMcpAutostartToggle');
+      if (autoToggle) autoToggle.checked = !!(autoStartResult && autoStartResult.success && autoStartResult.data);
+    } catch (e) {
+      console.error('initSettingsMcpStatus failed:', e);
+    }
+  },
+
+  updateSettingsMcpUI(data) {
+    data = data || { running: false, readonly: true, toolCount: 0 };
+    const dot = document.getElementById('settingsMcpDot');
+    const text = document.getElementById('settingsMcpStatusText');
+    const modeTag = document.getElementById('settingsMcpModeTag');
+    const toolCount = document.getElementById('settingsMcpToolCount');
+    const startedAt = document.getElementById('settingsMcpStartedAt');
+    const toggle = document.getElementById('settingsMcpToggle');
+    const readonlyToggle = document.getElementById('settingsMcpReadonlyToggle');
+    const masterCard = document.getElementById('settingsMcpMasterCard');
+
+    // 主控卡片的左侧状态条颜色随状态变化
+    if (masterCard) {
+      masterCard.classList.remove('running', 'stopped');
+      masterCard.classList.add(data.running ? 'running' : 'stopped');
+    }
+    if (dot) dot.className = 'dot ' + (data.running ? 'running' : 'stopped');
+    if (text) text.textContent = data.running ? '运行中' : '未启动';
+    if (modeTag) {
+      modeTag.textContent = data.readonly ? '只读' : '读写';
+      modeTag.className = 'mode-tag' + (data.readonly ? '' : ' write');
+    }
+    if (toolCount) toolCount.textContent = (data.toolCount || 0) + ' 个工具可用';
+    if (startedAt) {
+      startedAt.textContent = data.running && data.startedAt
+        ? '启动于 ' + new Date(data.startedAt).toLocaleTimeString('zh-CN')
+        : '';
+    }
+    if (toggle) toggle.checked = !!data.running;
+    if (readonlyToggle) {
+      readonlyToggle.checked = !data.readonly;
+      readonlyToggle.disabled = !data.running;
+    }
+  },
+
+  async toggleMcpServiceFromSettings() {
+    if (!window.electronAPI?.mcpAPI) return;
+    const checkbox = document.getElementById('settingsMcpToggle');
+    const enabled = checkbox.checked;
+    const readonlyToggle = document.getElementById('settingsMcpReadonlyToggle');
+    const readonly = readonlyToggle ? !readonlyToggle.checked : true;
+    try {
+      const result = await window.electronAPI.mcpAPI.toggle(enabled, readonly);
+      if (result && result.success) {
+        this.updateSettingsMcpUI(result.data);
+        // 同步右上角设置弹窗的开关
+        const topToggle = document.getElementById('mcpServiceToggle');
+        if (topToggle) topToggle.checked = enabled;
+        this.showToast('MCP 服务已' + (enabled ? '启动' : '停止') + (enabled ? (readonly ? '（只读）' : '（读写）') : ''));
+      } else {
+        checkbox.checked = !enabled;
+        this.showToast('MCP 切换失败: ' + (result && result.error ? result.error : '未知错误'));
+      }
+    } catch (e) {
+      checkbox.checked = !enabled;
+      this.showToast('MCP 切换失败: ' + e.message);
+    }
+  },
+
+  async toggleMcpReadonlyFromSettings() {
+    if (!window.electronAPI?.mcpAPI) return;
+    const checkbox = document.getElementById('settingsMcpReadonlyToggle');
+    const allowWrite = checkbox.checked;
+    const readonly = !allowWrite;
+    try {
+      const result = await window.electronAPI.mcpAPI.setReadonly(readonly);
+      if (result && result.success) {
+        const statusResult = await window.electronAPI.mcpAPI.getStatus();
+        if (statusResult && statusResult.success) {
+          this.updateSettingsMcpUI(statusResult.data);
+        }
+        // 同步右上角设置弹窗
+        const topReadonly = document.getElementById('mcpReadonlyToggle');
+        if (topReadonly) topReadonly.checked = allowWrite;
+        this.showToast(allowWrite ? '已允许 MCP 写操作（重启服务生效）' : '已切换为只读模式（重启服务生效）');
+      } else {
+        checkbox.checked = !allowWrite;
+        this.showToast('切换读写模式失败: ' + (result && result.error ? result.error : '未知错误'));
+      }
+    } catch (e) {
+      checkbox.checked = !allowWrite;
+      this.showToast('切换读写模式失败: ' + e.message);
+    }
+  },
+
+  async toggleMcpAutostart() {
+    const checkbox = document.getElementById('settingsMcpAutostartToggle');
+    const enabled = checkbox.checked;
+    try {
+      const result = await window.electronAPI?.setMcpAutostart?.(enabled);
+      if (!result || !result.success) {
+        checkbox.checked = !enabled;
+        this.showToast('保存自启动设置失败');
+        return;
+      }
+      this.showToast(enabled ? '已开启 MCP 开机自启' : '已关闭 MCP 开机自启');
+    } catch (e) {
+      checkbox.checked = !enabled;
+      this.showToast('保存自启动设置失败: ' + e.message);
+    }
+  },
+
+  toggleSettingsMcpCard(cardId) {
+    const el = document.getElementById(cardId);
+    if (!el) return;
+    el.classList.toggle('expanded');
+    // 展开日志卡片时自动刷新
+    if (cardId === 'settingsMcpLogsCard' && el.classList.contains('expanded')) {
+      this.refreshSettingsMcpLogs();
+    }
+    // 展开接入示例时填入实际路径
+    if (cardId === 'settingsMcpStandaloneCard' && el.classList.contains('expanded')) {
+      this.fillSettingsMcpStandalonePath();
+    }
+  },
+
+  async fillSettingsMcpStandalonePath() {
+    const codeEl = document.getElementById('settingsMcpStandaloneCode');
+    if (!codeEl) return;
+    try {
+      const appPath = await window.electronAPI?.getAppPath?.();
+      // appPath 返回的是 userData 目录，需要回退到项目根目录
+      // 实际上对于 standalone MCP，应该使用项目源码路径
+      // 这里使用 process.cwd() 的概念：在 TRAE Work 中打开项目时，路径就是项目根目录
+      const sep = (navigator.platform || '').indexOf('Win') >= 0 ? '\\' : '/';
+      // 优先使用当前可执行的项目路径（开发模式下）
+      const projectPath = (typeof window !== 'undefined' && window.__WSS_PROJECT_PATH__) || '<项目路径>';
+      const mcpPath = projectPath + sep + 'src' + sep + 'main' + sep + 'mcp-standalone.js';
+      codeEl.textContent = '{\n  "mcpServers": {\n    "web-scout": {\n      "command": "node",\n      "args": ["' + mcpPath.replace(/\\/g, '\\\\') + '"],\n      "env": { "MCP_READONLY": "false" }\n    }\n  }\n}';
+    } catch (e) {
+      // 失败时保留占位符
+    }
+  },
+
+  async copySettingsMcpStalone() {
+    const codeEl = document.getElementById('settingsMcpStandaloneCode');
+    if (!codeEl) return;
+    const text = codeEl.textContent || '';
+    try {
+      await navigator.clipboard.writeText(text);
+      this.showToast('已复制到剪贴板');
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); this.showToast('已复制到剪贴板'); }
+      catch (e2) { this.showToast('复制失败'); }
+      document.body.removeChild(ta);
+    }
+  },
+
+  // 兼容方法名（HTML 中使用的是 copySettingsMcpStandalone）
+  async copySettingsMcpStandalone() {
+    return this.copySettingsMcpStalone();
+  },
+
+  async refreshSettingsMcpLogs() {
+    if (!window.electronAPI?.mcpAPI) return;
+    const listEl = document.getElementById('settingsMcpLogsList');
+    const countEl = document.getElementById('settingsMcpLogsCount');
+    if (!listEl) return;
+    try {
+      const result = await window.electronAPI.mcpAPI.getLogs();
+      if (result && result.success) {
+        const logs = Array.isArray(result.data) ? result.data : [];
+        if (countEl) countEl.textContent = '(' + logs.length + ')';
+        if (logs.length === 0) {
+          listEl.innerHTML = '<div class="mcp-logs-empty">暂无调用日志</div>';
+          return;
+        }
+        const self = this;
+        listEl.innerHTML = logs.slice().reverse().map(log => {
+          const time = log.timestamp ? new Date(log.timestamp).toLocaleTimeString('zh-CN') : '';
+          const statusCls = log.success ? 'ok' : 'fail';
+          const statusText = log.success ? 'OK' : '失败';
+          const argsStr = log.args ? JSON.stringify(log.args).slice(0, 120) : '';
+          const errStr = log.error ? ' · ' + log.error : '';
+          return '<div class="mcp-log-line">' +
+            '<span class="log-tool">' + self.escapeHtml(log.tool || '') + '</span>' +
+            '<span class="log-time">' + time + '</span>' +
+            '<span class="log-status ' + statusCls + '">' + statusText + '</span>' +
+            '<span class="log-args">' + self.escapeHtml(argsStr) + self.escapeHtml(errStr) + '</span>' +
+            '</div>';
+        }).join('');
+      }
+    } catch (e) {
+      console.error('refreshSettingsMcpLogs failed:', e);
+    }
+  },
+
+  async clearSettingsMcpLogs() {
+    // 主进程暂未提供清空日志的 IPC，这里通过刷新模拟（实际清空需主进程支持）
+    // 简单方案：直接清空 UI（下次刷新会重新拉取，但日志会持续累积）
+    const listEl = document.getElementById('settingsMcpLogsList');
+    const countEl = document.getElementById('settingsMcpLogsCount');
+    if (listEl) listEl.innerHTML = '<div class="mcp-logs-empty">日志已清空（仅 UI，主进程日志仍保留）</div>';
+    if (countEl) countEl.textContent = '(0)';
+    this.showToast('日志 UI 已清空');
+  },
+
+  // ===== 存储目录设置 =====
+  async loadSettingsDirs() {
+    try {
+      const [contentRes, templateRes] = await Promise.all([
+        window.electronAPI?.getDefaultExportDir?.(),
+        window.electronAPI?.getTemplateExportDir?.(),
+      ]);
+      const contentDir = contentRes?.data || '';
+      const templateDir = templateRes?.data || '';
+      this._updateSettingsDirDisplay('content', contentDir);
+      this._updateSettingsDirDisplay('template', templateDir);
+    } catch (e) {
+      console.error('loadSettingsDirs failed:', e);
+    }
+  },
+
+  _updateSettingsDirDisplay(target, dir) {
+    const display = document.getElementById('settings' + (target === 'content' ? 'Content' : 'Template') + 'DirDisplay');
+    const openBtn = document.getElementById('settings' + (target === 'content' ? 'Content' : 'Template') + 'DirOpen');
+    const clearBtn = document.getElementById('settings' + (target === 'content' ? 'Content' : 'Template') + 'DirClear');
+    if (display) {
+      display.textContent = dir || '未设置';
+      display.className = 'settings-dir-display' + (dir ? '' : ' empty');
+    }
+    if (openBtn) openBtn.disabled = !dir;
+    if (clearBtn) clearBtn.style.visibility = dir ? 'visible' : 'hidden';
+  },
+
+  async pickSettingsDir(target) {
+    try {
+      const dir = await window.electronAPI?.selectDirectory?.();
+      if (!dir) return;
+      if (target === 'content') {
+        await window.electronAPI?.setDefaultExportDir?.(dir);
+      } else {
+        await window.electronAPI?.setTemplateExportDir?.(dir);
+      }
+      this._updateSettingsDirDisplay(target, dir);
+      this.showToast('目录已设置: ' + dir);
+    } catch (e) {
+      this.showToast('选择目录失败: ' + e.message);
+    }
+  },
+
+  async openSettingsDir(target) {
+    try {
+      const res = target === 'content'
+        ? await window.electronAPI?.getDefaultExportDir?.()
+        : await window.electronAPI?.getTemplateExportDir?.();
+      const dir = res?.data || '';
+      if (!dir) {
+        this.showToast('未设置目录');
+        return;
+      }
+      await window.electronAPI?.openInExplorer?.(dir);
+    } catch (e) {
+      this.showToast('打开目录失败: ' + e.message);
+    }
+  },
+
+  async clearSettingsDir(target) {
+    try {
+      if (target === 'content') {
+        await window.electronAPI?.setDefaultExportDir?.('');
+      } else {
+        await window.electronAPI?.setTemplateExportDir?.('');
+      }
+      this._updateSettingsDirDisplay(target, '');
+      this.showToast('目录已清除');
+    } catch (e) {
+      this.showToast('清除目录失败: ' + e.message);
+    }
+  },
+
+  // ===== AI 配置 =====
+  async loadSettingsAiConfig() {
+    try {
+      const result = await window.electronAPI?.aiConfigAPI?.get?.();
+      if (result && result.success && result.data) {
+        const cfg = result.data;
+        const ep = document.getElementById('settingsAiEndpoint');
+        const key = document.getElementById('settingsAiApiKey');
+        const model = document.getElementById('settingsAiModel');
+        const temp = document.getElementById('settingsAiTemperature');
+        if (ep) ep.value = cfg.endpoint || '';
+        if (key) key.value = cfg.apiKey || ''; // 已脱敏
+        if (model) model.value = cfg.model || '';
+        if (temp) temp.value = typeof cfg.temperature === 'number' ? cfg.temperature : 0.7;
+      }
+    } catch (e) {
+      console.error('loadSettingsAiConfig failed:', e);
+    }
+  },
+
+  async saveSettingsAiConfig() {
+    const ep = document.getElementById('settingsAiEndpoint')?.value.trim() || '';
+    const key = document.getElementById('settingsAiApiKey')?.value.trim() || '';
+    const model = document.getElementById('settingsAiModel')?.value.trim() || '';
+    const temp = parseFloat(document.getElementById('settingsAiTemperature')?.value || '0.7');
+    if (!ep || !model) {
+      this.showToast('请填写 API 端点和模型名');
+      return;
+    }
+    try {
+      const result = await window.electronAPI?.aiConfigAPI?.save?.({
+        endpoint: ep,
+        apiKey: key,
+        model: model,
+        temperature: temp,
+        maxTokens: 2048
+      });
+      if (result && result.success) {
+        this.showToast('AI 配置已保存');
+        // 重新加载（apiKey 会显示为脱敏值）
+        await this.loadSettingsAiConfig();
+      } else {
+        this.showToast('保存失败: ' + (result?.error || '未知错误'));
+      }
+    } catch (e) {
+      this.showToast('保存失败: ' + e.message);
+    }
+  },
+
+  async testSettingsAiConfig() {
+    const ep = document.getElementById('settingsAiEndpoint')?.value.trim() || '';
+    const key = document.getElementById('settingsAiApiKey')?.value.trim() || '';
+    const model = document.getElementById('settingsAiModel')?.value.trim() || '';
+    if (!ep || !model) {
+      this.showToast('请填写 API 端点和模型名');
+      return;
+    }
+    this.showToast('正在测试连接…');
+    try {
+      const result = await window.electronAPI?.aiConfigAPI?.test?.({
+        endpoint: ep,
+        apiKey: key,
+        model: model
+      });
+      if (result && result.success) {
+        this.showToast('✓ 连接成功');
+      } else {
+        this.showToast('✗ 连接失败: ' + (result?.error || '未知错误'));
+      }
+    } catch (e) {
+      this.showToast('✗ 连接失败: ' + e.message);
+    }
+  },
+
+  toggleSettingsAiKeyVisibility() {
+    const keyInput = document.getElementById('settingsAiApiKey');
+    const btn = document.getElementById('settingsAiKeyToggleBtn');
+    if (!keyInput) return;
+    if (keyInput.type === 'password') {
+      keyInput.type = 'text';
+      if (btn) btn.textContent = '👁 隐藏';
+      // 5 秒后自动隐藏
+      clearTimeout(this._aiKeyHideTimer);
+      this._aiKeyHideTimer = setTimeout(() => {
+        keyInput.type = 'password';
+        if (btn) btn.textContent = '👁 显示';
+      }, 5000);
+    } else {
+      keyInput.type = 'password';
+      if (btn) btn.textContent = '👁 显示';
+    }
+  },
+
+  // ===== 应用信息 =====
+  async loadSettingsDataDir() {
+    try {
+      const appPath = await window.electronAPI?.getAppPath?.();
+      const el = document.getElementById('settingsDataDirPath');
+      if (el && appPath) el.textContent = appPath;
+    } catch (e) { /* ignore */ }
+  },
+
+  async openSettingsDataDir() {
+    try {
+      const appPath = await window.electronAPI?.getAppPath?.();
+      if (appPath) {
+        await window.electronAPI?.openInExplorer?.(appPath);
+      }
+    } catch (e) {
+      this.showToast('打开失败: ' + e.message);
+    }
+  },
+
+  openGithubRepo() {
+    window.electronAPI?.openExternal?.('https://github.com/HSyilin/web-scout');
+  },
+
 
   updateResourceLayerVisibility() {
     const layerPanels = document.getElementById('layerPanels');
