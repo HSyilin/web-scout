@@ -251,12 +251,10 @@ web-scout/
 
 ---
 
-## CI/CD
+## 安装包
 
-Windows 与 Linux 安装包**分别独立构建**，避免用户拉取全部平台产物：
-
-- **Windows 构建**（[build-windows.yml](.github/workflows/build-windows.yml)）：在 `windows-latest` 上运行，产出 NSIS 安装包和便携版 exe，上传到 GitHub Releases
-- **Linux 构建**（[build-linux.yml](.github/workflows/build-linux.yml)）：在 `ubuntu-22.04` 上运行，产出 deb 包，上传到 GitHub Releases
+- **Windows 构建**（[build-windows.yml](.github/workflows/build-windows.yml)）：在 `windows-latest` 上运行
+- **Linux 构建**（[build-linux.yml](.github/workflows/build-linux.yml)）：在 `ubuntu-22.04` 上运行
 
 **触发方式**：
 - 打 tag `v*` 自动触发两个平台的并行构建
